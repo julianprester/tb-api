@@ -38,7 +38,7 @@ export function parseRequestBody(request, NetUtil) {
 }
 
 /**
- * Send JSON response
+ * Send JSON response with proper UTF-8 encoding
  * @param {object} response - HTTP response object
  * @param {string} httpVersion - HTTP version string
  * @param {object} data - Data to serialize as JSON
@@ -48,7 +48,18 @@ export function sendJson(response, httpVersion, data, status = 200) {
   const statusText = status === 200 ? "OK" : status === 404 ? "Not Found" : "Error";
   response.setStatusLine(httpVersion, status, statusText);
   response.setHeader("Content-Type", "application/json; charset=utf-8", false);
-  response.write(JSON.stringify(data, null, 2));
+  
+  const jsonString = JSON.stringify(data, null, 2);
+  // Convert to UTF-8 bytes for proper encoding of non-ASCII characters
+  const encoder = new TextEncoder();
+  const utf8Bytes = encoder.encode(jsonString);
+  
+  // Write bytes using bodyOutputStream
+  const outputStream = response.bodyOutputStream;
+  outputStream.write(
+    Array.from(utf8Bytes, byte => String.fromCharCode(byte)).join(""),
+    utf8Bytes.length
+  );
 }
 
 /**
