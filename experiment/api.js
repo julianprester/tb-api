@@ -40,11 +40,11 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
     let onRequestFire = null;
 
     /**
-     * Send JSON response
+     * Write response body and finish the HTTP response
      */
-    function sendJsonResponse(requestId, data, statusCode = 200) {
+    function writeResponse(requestId, statusCode, body) {
       const pending = pendingRequests.get(requestId);
-      if (!pending) return;
+      if (!pending) return false;
 
       pendingRequests.delete(requestId);
       const { response, httpVersion } = pending;
@@ -53,7 +53,6 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
       response.setHeader("Content-Type", "application/json; charset=utf-8", false);
       response.setHeader("Access-Control-Allow-Origin", "*", false);
 
-      const body = JSON.stringify(data);
       const cos = Cc["@mozilla.org/intl/converter-output-stream;1"]
         .createInstance(Ci.nsIConverterOutputStream);
       cos.init(response.bodyOutputStream, "UTF-8");
@@ -61,6 +60,14 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
       cos.close();
 
       response.finish();
+      return true;
+    }
+
+    /**
+     * Send JSON response
+     */
+    function sendJsonResponse(requestId, data, statusCode = 200) {
+      writeResponse(requestId, statusCode, JSON.stringify(data));
     }
 
     /**
@@ -79,15 +86,12 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
     }
 
     /**
-     * Parse JSON body
+     * Determine HTTP status code from error message
      */
-    function parseBody(bodyStr) {
-      if (!bodyStr) return {};
-      try {
-        return JSON.parse(bodyStr);
-      } catch (e) {
-        return {};
-      }
+    function getErrorStatus(errorMessage) {
+      if (errorMessage.includes("not found")) return 404;
+      if (errorMessage.includes("not available")) return 503;
+      return 400;
     }
 
     /**
@@ -109,42 +113,36 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
     }
 
     /**
+     * Send calendar response with appropriate status code
+     */
+    function sendCalendarResponse(requestId, result) {
+      const status = result.error ? getErrorStatus(result.error) : 200;
+      sendJsonResponse(requestId, result, status);
+    }
+
+    /**
      * Handle calendar routes directly
      */
     async function handleCalendarRoute(requestId, method, path, queryString, body) {
-      const params = { ...parseQueryString(queryString), ...parseBody(body) };
+      const bodyObj = body ? JSON.parse(body) : {};
+      const params = { ...parseQueryString(queryString), ...bodyObj };
 
       try {
         // GET /calendars
         if (path === "/calendars" && method === "GET") {
-          const result = calendar.listCalendars(cal);
-          if (result.error) {
-            sendJsonResponse(requestId, result, 503);
-          } else {
-            sendJsonResponse(requestId, result);
-          }
+          sendCalendarResponse(requestId, calendar.listCalendars(cal));
           return;
         }
 
         // GET /events
         if (path === "/events" && method === "GET") {
-          const result = await calendar.listEvents(params, cal, Ci);
-          if (result.error) {
-            sendJsonResponse(requestId, result, result.error.includes("not available") ? 503 : 400);
-          } else {
-            sendJsonResponse(requestId, result);
-          }
+          sendCalendarResponse(requestId, await calendar.listEvents(params, cal, Ci));
           return;
         }
 
         // POST /events
         if (path === "/events" && method === "POST") {
-          const result = await calendar.createEvent(params, cal, Ci, Cc);
-          if (result.error) {
-            sendJsonResponse(requestId, result, result.error.includes("not available") ? 503 : 400);
-          } else {
-            sendJsonResponse(requestId, result);
-          }
+          sendCalendarResponse(requestId, await calendar.createEvent(params, cal, Ci, Cc));
           return;
         }
 
@@ -152,11 +150,7 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
         if (path.startsWith("/events/") && method === "PATCH") {
           const eventId = extractPathParam(path, "/events/");
           if (eventId) {
-            const result = await calendar.updateEvent(eventId, params, cal, Ci, Cc);
-            const status = result.error 
-              ? (result.error.includes("not found") ? 404 : result.error.includes("not available") ? 503 : 400)
-              : 200;
-            sendJsonResponse(requestId, result, status);
+            sendCalendarResponse(requestId, await calendar.updateEvent(eventId, params, cal, Ci, Cc));
             return;
           }
         }
@@ -165,11 +159,7 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
         if (path.startsWith("/events/") && method === "DELETE") {
           const eventId = extractPathParam(path, "/events/");
           if (eventId) {
-            const result = await calendar.deleteEvent(eventId, params, cal);
-            const status = result.error
-              ? (result.error.includes("not found") ? 404 : result.error.includes("not available") ? 503 : 400)
-              : 200;
-            sendJsonResponse(requestId, result, status);
+            sendCalendarResponse(requestId, await calendar.deleteEvent(eventId, params, cal));
             return;
           }
         }
@@ -228,10 +218,10 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
             if (onRequestFire) {
               onRequestFire.async({
                 id: requestId,
-                method: method,
-                path: path,
+                method,
+                path,
                 queryString: queryString || "",
-                body: body
+                body
               });
             }
           });
@@ -251,26 +241,9 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
         },
 
         sendResponse(requestId, statusCode, body) {
-          const pending = pendingRequests.get(requestId);
-          if (!pending) {
+          if (!writeResponse(requestId, statusCode, body)) {
             console.error(`[tb-api] No pending request with id ${requestId}`);
-            return;
           }
-
-          pendingRequests.delete(requestId);
-
-          const { response, httpVersion } = pending;
-          response.setStatusLine(httpVersion, statusCode, "OK");
-          response.setHeader("Content-Type", "application/json; charset=utf-8", false);
-          response.setHeader("Access-Control-Allow-Origin", "*", false);
-
-          const cos = Cc["@mozilla.org/intl/converter-output-stream;1"]
-            .createInstance(Ci.nsIConverterOutputStream);
-          cos.init(response.bodyOutputStream, "UTF-8");
-          cos.writeString(body);
-          cos.close();
-
-          response.finish();
         },
 
         onRequest: new ExtensionCommon.EventManager({

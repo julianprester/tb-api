@@ -46,62 +46,53 @@ async function handleRequest(request) {
 
     // Email routes
     if (path === "/messages" && method === "GET") {
-      const result = await Email.searchMessages(params);
-      return result.error ? Utils.errorResponse(result.error) : Utils.jsonResponse(result);
+      return Utils.resultResponse(await Email.searchMessages(params));
     }
 
     if (path.startsWith("/messages/") && method === "GET") {
       const messageId = decodeURIComponent(path.slice("/messages/".length));
-      const result = await Email.getMessage(messageId);
-      return result.error ? Utils.errorResponse(result.error, 404) : Utils.jsonResponse(result);
+      return Utils.resultResponse(await Email.getMessage(messageId), 404);
     }
 
     if (path === "/messages" && method === "POST") {
-      const result = await Email.composeMessage(params);
-      return result.error ? Utils.errorResponse(result.error) : Utils.jsonResponse(result);
+      return Utils.resultResponse(await Email.composeMessage(params));
     }
 
     if (path === "/messages" && method === "PATCH") {
-      const result = await Email.updateMessages(params);
-      return result.error ? Utils.errorResponse(result.error) : Utils.jsonResponse(result);
+      return Utils.resultResponse(await Email.updateMessages(params));
     }
 
     if (path === "/mailboxes" && method === "GET") {
-      const result = await Email.listMailboxes();
-      return Utils.jsonResponse(result);
+      return Utils.jsonResponse(await Email.listMailboxes());
     }
 
     if (path === "/identities" && method === "GET") {
-      const result = await Email.listIdentities();
-      return Utils.jsonResponse(result);
+      return Utils.jsonResponse(await Email.listIdentities());
     }
 
     // Contacts routes
     if (path === "/addressbooks" && method === "GET") {
-      const result = await Contacts.listAddressBooks();
-      return Utils.jsonResponse(result);
+      return Utils.jsonResponse(await Contacts.listAddressBooks());
     }
 
     if (path === "/contacts" && method === "GET") {
-      const result = await Contacts.searchContacts(params);
-      return result.error ? Utils.errorResponse(result.error) : Utils.jsonResponse(result);
+      return Utils.resultResponse(await Contacts.searchContacts(params));
     }
 
     if (path === "/contacts" && method === "POST") {
-      const result = await Contacts.createContact(params);
-      return result.error ? Utils.errorResponse(result.error) : Utils.jsonResponse(result);
+      return Utils.resultResponse(await Contacts.createContact(params));
     }
 
     if (path.startsWith("/contacts/") && method === "PATCH") {
       const contactId = decodeURIComponent(path.slice("/contacts/".length));
       const result = await Contacts.updateContact(contactId, params);
-      return result.error ? Utils.errorResponse(result.error, result.error.includes("not found") ? 404 : 400) : Utils.jsonResponse(result);
+      return Utils.resultResponse(result, Utils.getErrorStatusFromMessage(result.error || ""));
     }
 
     if (path.startsWith("/contacts/") && method === "DELETE") {
       const contactId = decodeURIComponent(path.slice("/contacts/".length));
       const result = await Contacts.deleteContact(contactId);
-      return result.error ? Utils.errorResponse(result.error, result.error.includes("not found") ? 404 : 400) : Utils.jsonResponse(result);
+      return Utils.resultResponse(result, Utils.getErrorStatusFromMessage(result.error || ""));
     }
 
     // Not found
