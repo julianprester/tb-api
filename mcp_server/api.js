@@ -22,8 +22,6 @@ function logError(msg, error) {
 
 var mcpServer = class extends ExtensionCommon.ExtensionAPI {
   getAPI(context) {
-    log("getAPI called");
-
     const extensionRoot = context.extension.rootURI;
     const resourceName = "tb-api";
 
@@ -33,7 +31,6 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
         extensionRoot,
         resProto.ALLOW_CONTENT_ACCESS
       );
-      log(`Resource protocol registered: resource://${resourceName}/`);
     } catch (e) {
       logError("Failed to register resource protocol", e);
     }
@@ -41,69 +38,43 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
     return {
       mcpServer: {
         async start() {
-          log("start() called");
-
           if (serverInstance) {
-            log("Stopping existing server...");
             try {
               await new Promise((resolve) => serverInstance.stop(resolve));
-              log("Existing server stopped");
             } catch (e) {
-              log("Error stopping existing server: " + e.message);
+              // Ignore stop errors
             }
             serverInstance = null;
           }
 
           try {
-            // Import modules
-            log("Importing HttpServer...");
+            // Import Thunderbird modules
             const { HttpServer } = ChromeUtils.importESModule(
               `resource://${resourceName}/httpd.sys.mjs`
             );
-            log("HttpServer imported");
-
-            log("Importing NetUtil...");
             const { NetUtil } = ChromeUtils.importESModule(
               "resource://gre/modules/NetUtil.sys.mjs"
             );
-            log("NetUtil imported");
-
-            log("Importing MailServices...");
             const { MailServices } = ChromeUtils.importESModule(
               "resource:///modules/MailServices.sys.mjs"
             );
-            log("MailServices imported");
-
-            log("Importing MsgHdrToMimeMessage...");
             const { MsgHdrToMimeMessage } = ChromeUtils.importESModule(
               "resource:///modules/gloda/MimeMessage.sys.mjs"
             );
-            log("MsgHdrToMimeMessage imported");
 
             // Import our modules
-            log("Importing utils...");
             const utils = ChromeUtils.importESModule(
               `resource://${resourceName}/mcp_server/utils.sys.mjs`
             );
-            log("utils imported");
-
-            log("Importing email...");
             const email = ChromeUtils.importESModule(
               `resource://${resourceName}/mcp_server/email.sys.mjs`
             );
-            log("email imported");
-
-            log("Importing calendar...");
             const calendar = ChromeUtils.importESModule(
               `resource://${resourceName}/mcp_server/calendar.sys.mjs`
             );
-            log("calendar imported");
-
-            log("Importing contacts...");
             const contacts = ChromeUtils.importESModule(
               `resource://${resourceName}/mcp_server/contacts.sys.mjs`
             );
-            log("contacts imported");
 
             // Calendar (optional)
             let cal = null;
@@ -112,19 +83,12 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                 "resource:///modules/calendar/calUtils.sys.mjs"
               );
               cal = calModule.cal;
-              log("Calendar module imported");
             } catch (e) {
-              log("Calendar not available: " + e.message);
+              // Calendar not available
             }
 
-            log("All modules imported successfully");
-
             // Create server
-            log("Creating HttpServer instance...");
             serverInstance = new HttpServer();
-            log("HttpServer created");
-
-            log("Registering route /...");
             // ============================================================
             // ROUTE: /
             // ============================================================
@@ -158,16 +122,13 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                 },
               });
             });
-            log("Route / registered");
 
             // ============================================================
             // ROUTE: /messages (base path for search, compose, update)
             // ============================================================
-            log("Registering route /messages...");
             serverInstance.registerPathHandler("/messages", (req, res) => {
               if (req.method === "GET") {
                 // GET /messages (search)
-                log(`GET /messages?${req.queryString}`);
                 try {
                   const params = utils.parseQueryString(req.queryString);
                   const result = email.searchMessages(params, MailServices, Ci, utils.parseDate);
@@ -183,7 +144,6 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
 
               } else if (req.method === "POST") {
                 // POST /messages (compose)
-                log("POST /messages");
                 try {
                   const params = utils.parseRequestBody(req, NetUtil);
                   const result = email.composeMessage(params, MailServices, Ci);
@@ -199,7 +159,6 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
 
               } else if (req.method === "PATCH") {
                 // PATCH /messages (update)
-                log("PATCH /messages");
                 try {
                   const params = utils.parseRequestBody(req, NetUtil);
                   const result = email.updateMessages(params, MailServices, Ci);
@@ -221,13 +180,11 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
             // ============================================================
             // ROUTE: /messages/:id (get single message)
             // ============================================================
-            log("Registering route /messages/...");
             serverInstance.registerPrefixHandler("/messages/", (req, res) => {
               const messageId = utils.extractPathParam(req.path, "/messages/");
 
               if (req.method === "GET" && messageId) {
                 // GET /messages/:id
-                log(`GET /messages/${messageId}`);
                 res.processAsync();
 
                 email.getMessage(messageId, MailServices, MsgHdrToMimeMessage, Ci)
@@ -253,7 +210,6 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
             // ROUTE: /mailboxes
             // ============================================================
             serverInstance.registerPathHandler("/mailboxes", (req, res) => {
-              log("GET /mailboxes");
               if (req.method !== "GET") {
                 utils.sendError(res, req.httpVersion, "Method not allowed", 405);
                 return;
@@ -271,7 +227,6 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
             // ROUTE: /identities
             // ============================================================
             serverInstance.registerPathHandler("/identities", (req, res) => {
-              log("GET /identities");
               if (req.method !== "GET") {
                 utils.sendError(res, req.httpVersion, "Method not allowed", 405);
                 return;
@@ -289,7 +244,6 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
             // ROUTE: /calendars
             // ============================================================
             serverInstance.registerPathHandler("/calendars", (req, res) => {
-              log("GET /calendars");
               if (req.method !== "GET") {
                 utils.sendError(res, req.httpVersion, "Method not allowed", 405);
                 return;
@@ -313,7 +267,6 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
             serverInstance.registerPathHandler("/events", (req, res) => {
               if (req.method === "GET") {
                 // GET /events (list)
-                log(`GET /events?${req.queryString}`);
                 res.processAsync();
 
                 const params = utils.parseQueryString(req.queryString);
@@ -335,7 +288,6 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
 
               } else if (req.method === "POST") {
                 // POST /events (create)
-                log("POST /events");
                 res.processAsync();
 
                 const params = utils.parseRequestBody(req, NetUtil);
@@ -368,7 +320,6 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
 
               if (req.method === "PATCH" && eventId) {
                 // PATCH /events/:id (update)
-                log(`PATCH /events/${eventId}`);
                 res.processAsync();
 
                 const params = utils.parseRequestBody(req, NetUtil);
@@ -391,7 +342,6 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
 
               } else if (req.method === "DELETE" && eventId) {
                 // DELETE /events/:id
-                log(`DELETE /events/${eventId}`);
                 res.processAsync();
 
                 const params = utils.parseQueryString(req.queryString);
@@ -421,7 +371,6 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
             // ROUTE: /addressbooks
             // ============================================================
             serverInstance.registerPathHandler("/addressbooks", (req, res) => {
-              log("GET /addressbooks");
               if (req.method !== "GET") {
                 utils.sendError(res, req.httpVersion, "Method not allowed", 405);
                 return;
@@ -441,7 +390,6 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
             serverInstance.registerPathHandler("/contacts", (req, res) => {
               if (req.method === "GET") {
                 // GET /contacts (search)
-                log(`GET /contacts?${req.queryString}`);
                 try {
                   const params = utils.parseQueryString(req.queryString);
                   const result = contacts.searchContacts(params, MailServices);
@@ -457,7 +405,6 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
 
               } else if (req.method === "POST") {
                 // POST /contacts (create)
-                log("POST /contacts");
                 try {
                   const params = utils.parseRequestBody(req, NetUtil);
                   const result = contacts.createContact(params, MailServices, Cc, Ci);
@@ -484,7 +431,6 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
 
               if (req.method === "PATCH" && contactId) {
                 // PATCH /contacts/:id (update)
-                log(`PATCH /contacts/${contactId}`);
                 try {
                   const params = utils.parseRequestBody(req, NetUtil);
                   const result = contacts.updateContact(contactId, params, MailServices);
@@ -501,7 +447,6 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
 
               } else if (req.method === "DELETE" && contactId) {
                 // DELETE /contacts/:id
-                log(`DELETE /contacts/${contactId}`);
                 try {
                   const params = utils.parseQueryString(req.queryString);
                   const result = contacts.deleteContact(contactId, params, MailServices);
