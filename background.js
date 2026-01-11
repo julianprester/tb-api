@@ -16,7 +16,7 @@ async function handleRequest(request) {
     if (path === "/" && method === "GET") {
       return Utils.jsonResponse({
         name: "Thunderbird REST API",
-        version: "1.0",
+        version: "2.0",
         endpoints: {
           email: [
             "GET /messages - Search messages",
