@@ -1,7 +1,7 @@
 /* exported email */
 "use strict";
 
-import { sanitizeForJson } from "resource://tb-api/utils.sys.mjs";
+import { sanitizeForJson } from "resource://tb-api/mcp_server/utils.sys.mjs";
 
 const MAX_RESULTS = 100;
 const DEFAULT_LIMIT = 50;

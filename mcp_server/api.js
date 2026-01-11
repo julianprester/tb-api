@@ -73,16 +73,16 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
 
             // Import our modules
             const utils = ChromeUtils.importESModule(
-              `resource://${resourceName}/utils.sys.mjs`
+              `resource://${resourceName}/mcp_server/utils.sys.mjs`
             );
             const email = ChromeUtils.importESModule(
-              `resource://${resourceName}/email.sys.mjs`
+              `resource://${resourceName}/mcp_server/email.sys.mjs`
             );
             const calendar = ChromeUtils.importESModule(
-              `resource://${resourceName}/calendar.sys.mjs`
+              `resource://${resourceName}/mcp_server/calendar.sys.mjs`
             );
             const contacts = ChromeUtils.importESModule(
-              `resource://${resourceName}/contacts.sys.mjs`
+              `resource://${resourceName}/mcp_server/contacts.sys.mjs`
             );
 
             // Calendar (optional)
