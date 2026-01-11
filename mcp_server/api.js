@@ -120,8 +120,11 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
             log("All modules imported successfully");
 
             // Create server
+            log("Creating HttpServer instance...");
             serverInstance = new HttpServer();
+            log("HttpServer created");
 
+            log("Registering route /...");
             // ============================================================
             // ROUTE: /
             // ============================================================
@@ -155,34 +158,14 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                 },
               });
             });
+            log("Route / registered");
 
             // ============================================================
-            // ROUTE: /messages
+            // ROUTE: /messages (base path for search, compose, update)
             // ============================================================
-            serverInstance.registerPrefixHandler("/messages", (req, res) => {
-              const messageId = utils.extractPathParam(req.path, "/messages/");
-
-              if (req.method === "GET" && messageId) {
-                // GET /messages/:id
-                log(`GET /messages/${messageId}`);
-                res.processAsync();
-
-                email.getMessage(messageId, MailServices, MsgHdrToMimeMessage, Ci)
-                  .then((result) => {
-                    if (result.error) {
-                      utils.sendError(res, req.httpVersion, result.error, 404);
-                    } else {
-                      utils.sendJson(res, req.httpVersion, result);
-                    }
-                    res.finish();
-                  })
-                  .catch((e) => {
-                    logError("Error in GET /messages/:id", e);
-                    utils.sendError(res, req.httpVersion, e.message, 500);
-                    res.finish();
-                  });
-
-              } else if (req.method === "GET") {
+            log("Registering route /messages...");
+            serverInstance.registerPathHandler("/messages", (req, res) => {
+              if (req.method === "GET") {
                 // GET /messages (search)
                 log(`GET /messages?${req.queryString}`);
                 try {
@@ -230,6 +213,37 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                   utils.sendError(res, req.httpVersion, e.message, 500);
                 }
 
+              } else {
+                utils.sendError(res, req.httpVersion, "Method not allowed", 405);
+              }
+            });
+
+            // ============================================================
+            // ROUTE: /messages/:id (get single message)
+            // ============================================================
+            log("Registering route /messages/...");
+            serverInstance.registerPrefixHandler("/messages/", (req, res) => {
+              const messageId = utils.extractPathParam(req.path, "/messages/");
+
+              if (req.method === "GET" && messageId) {
+                // GET /messages/:id
+                log(`GET /messages/${messageId}`);
+                res.processAsync();
+
+                email.getMessage(messageId, MailServices, MsgHdrToMimeMessage, Ci)
+                  .then((result) => {
+                    if (result.error) {
+                      utils.sendError(res, req.httpVersion, result.error, 404);
+                    } else {
+                      utils.sendJson(res, req.httpVersion, result);
+                    }
+                    res.finish();
+                  })
+                  .catch((e) => {
+                    logError("Error in GET /messages/:id", e);
+                    utils.sendError(res, req.httpVersion, e.message, 500);
+                    res.finish();
+                  });
               } else {
                 utils.sendError(res, req.httpVersion, "Method not allowed", 405);
               }
@@ -294,12 +308,10 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
             });
 
             // ============================================================
-            // ROUTE: /events
+            // ROUTE: /events (list, create)
             // ============================================================
-            serverInstance.registerPrefixHandler("/events", (req, res) => {
-              const eventId = utils.extractPathParam(req.path, "/events/");
-
-              if (req.method === "GET" && !eventId) {
+            serverInstance.registerPathHandler("/events", (req, res) => {
+              if (req.method === "GET") {
                 // GET /events (list)
                 log(`GET /events?${req.queryString}`);
                 res.processAsync();
@@ -321,7 +333,7 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                     res.finish();
                   });
 
-              } else if (req.method === "POST" && !eventId) {
+              } else if (req.method === "POST") {
                 // POST /events (create)
                 log("POST /events");
                 res.processAsync();
@@ -343,7 +355,18 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                     res.finish();
                   });
 
-              } else if (req.method === "PATCH" && eventId) {
+              } else {
+                utils.sendError(res, req.httpVersion, "Method not allowed", 405);
+              }
+            });
+
+            // ============================================================
+            // ROUTE: /events/:id (update, delete)
+            // ============================================================
+            serverInstance.registerPrefixHandler("/events/", (req, res) => {
+              const eventId = utils.extractPathParam(req.path, "/events/");
+
+              if (req.method === "PATCH" && eventId) {
                 // PATCH /events/:id (update)
                 log(`PATCH /events/${eventId}`);
                 res.processAsync();
@@ -413,12 +436,10 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
             });
 
             // ============================================================
-            // ROUTE: /contacts
+            // ROUTE: /contacts (search, create)
             // ============================================================
-            serverInstance.registerPrefixHandler("/contacts", (req, res) => {
-              const contactId = utils.extractPathParam(req.path, "/contacts/");
-
-              if (req.method === "GET" && !contactId) {
+            serverInstance.registerPathHandler("/contacts", (req, res) => {
+              if (req.method === "GET") {
                 // GET /contacts (search)
                 log(`GET /contacts?${req.queryString}`);
                 try {
@@ -434,7 +455,7 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                   utils.sendError(res, req.httpVersion, e.message, 500);
                 }
 
-              } else if (req.method === "POST" && !contactId) {
+              } else if (req.method === "POST") {
                 // POST /contacts (create)
                 log("POST /contacts");
                 try {
@@ -450,7 +471,18 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                   utils.sendError(res, req.httpVersion, e.message, 500);
                 }
 
-              } else if (req.method === "PATCH" && contactId) {
+              } else {
+                utils.sendError(res, req.httpVersion, "Method not allowed", 405);
+              }
+            });
+
+            // ============================================================
+            // ROUTE: /contacts/:id (update, delete)
+            // ============================================================
+            serverInstance.registerPrefixHandler("/contacts/", (req, res) => {
+              const contactId = utils.extractPathParam(req.path, "/contacts/");
+
+              if (req.method === "PATCH" && contactId) {
                 // PATCH /contacts/:id (update)
                 log(`PATCH /contacts/${contactId}`);
                 try {
