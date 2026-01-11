@@ -22,7 +22,7 @@
   ],
   "background": {
     "scripts": [
-      "lib/ical.min.js",
+      "lib/ical.js",
       "lib/utils.js",
       "lib/email.js",
       "lib/contacts.js",
