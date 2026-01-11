@@ -7,15 +7,21 @@ var { ExtensionCommon } = ChromeUtils.importESModule(
 
 var httpServer = class extends ExtensionCommon.ExtensionAPI {
   getAPI(context) {
-    // Load HttpServer from httpd.sys.mjs (ES module at root)
-    const { HttpServer } = ChromeUtils.importESModule(
-      context.extension.rootURI.resolve("httpd.sys.mjs")
+    // Load HttpServer via loadSubScript (httpd.js is not an ES module)
+    const httpdScope = {};
+    Services.scriptloader.loadSubScript(
+      context.extension.rootURI.resolve("experiment/httpd.js"),
+      httpdScope
     );
+    const { HttpServer } = httpdScope;
 
     // Import calendar module
-    const calendar = ChromeUtils.importESModule(
-      context.extension.rootURI.resolve("experiment/calendar.sys.mjs")
+    const calendarScope = {};
+    Services.scriptloader.loadSubScript(
+      context.extension.rootURI.resolve("experiment/calendar.js"),
+      calendarScope
     );
+    const calendar = calendarScope;
 
     // Calendar API (optional - try to load Thunderbird's calendar module)
     let cal = null;
