@@ -1,0 +1,63 @@
+[
+  {
+    "namespace": "httpServer",
+    "functions": [
+      {
+        "name": "start",
+        "type": "function",
+        "async": true,
+        "parameters": [
+          {
+            "name": "port",
+            "type": "integer",
+            "description": "Port to listen on"
+          }
+        ]
+      },
+      {
+        "name": "stop",
+        "type": "function",
+        "async": true,
+        "parameters": []
+      },
+      {
+        "name": "sendResponse",
+        "type": "function",
+        "async": false,
+        "parameters": [
+          {
+            "name": "requestId",
+            "type": "string"
+          },
+          {
+            "name": "statusCode",
+            "type": "integer"
+          },
+          {
+            "name": "body",
+            "type": "string"
+          }
+        ]
+      }
+    ],
+    "events": [
+      {
+        "name": "onRequest",
+        "type": "function",
+        "parameters": [
+          {
+            "name": "request",
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "method": { "type": "string" },
+              "path": { "type": "string" },
+              "queryString": { "type": "string" },
+              "body": { "type": "string" }
+            }
+          }
+        ]
+      }
+    ]
+  }
+]
