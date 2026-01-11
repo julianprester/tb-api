@@ -56,34 +56,54 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
 
           try {
             // Import modules
-            log("Importing modules...");
-
+            log("Importing HttpServer...");
             const { HttpServer } = ChromeUtils.importESModule(
               `resource://${resourceName}/httpd.sys.mjs`
             );
+            log("HttpServer imported");
+
+            log("Importing NetUtil...");
             const { NetUtil } = ChromeUtils.importESModule(
               "resource://gre/modules/NetUtil.sys.mjs"
             );
+            log("NetUtil imported");
+
+            log("Importing MailServices...");
             const { MailServices } = ChromeUtils.importESModule(
               "resource:///modules/MailServices.sys.mjs"
             );
+            log("MailServices imported");
+
+            log("Importing MsgHdrToMimeMessage...");
             const { MsgHdrToMimeMessage } = ChromeUtils.importESModule(
               "resource:///modules/gloda/MimeMessage.sys.mjs"
             );
+            log("MsgHdrToMimeMessage imported");
 
             // Import our modules
+            log("Importing utils...");
             const utils = ChromeUtils.importESModule(
               `resource://${resourceName}/mcp_server/utils.sys.mjs`
             );
+            log("utils imported");
+
+            log("Importing email...");
             const email = ChromeUtils.importESModule(
               `resource://${resourceName}/mcp_server/email.sys.mjs`
             );
+            log("email imported");
+
+            log("Importing calendar...");
             const calendar = ChromeUtils.importESModule(
               `resource://${resourceName}/mcp_server/calendar.sys.mjs`
             );
+            log("calendar imported");
+
+            log("Importing contacts...");
             const contacts = ChromeUtils.importESModule(
               `resource://${resourceName}/mcp_server/contacts.sys.mjs`
             );
+            log("contacts imported");
 
             // Calendar (optional)
             let cal = null;
