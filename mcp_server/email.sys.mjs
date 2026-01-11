@@ -202,6 +202,20 @@ export function searchMessages(params, MailServices, Ci, parseDate) {
           }
         }
 
+        // Get preview from message header (cached by Thunderbird)
+        let preview = "";
+        try {
+          preview = msgHdr.getStringProperty("preview") || "";
+          // Truncate to PREVIEW_LENGTH and sanitize
+          if (preview.length > PREVIEW_LENGTH) {
+            preview = preview.substring(0, PREVIEW_LENGTH) + "...";
+          }
+          // Remove control characters
+          preview = preview.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+        } catch {
+          // Preview not available
+        }
+
         results.push({
           id: msgHdr.messageKey,
           message_id: msgHdr.messageId,
@@ -211,7 +225,7 @@ export function searchMessages(params, MailServices, Ci, parseDate) {
           flags: msgHdrToFlags(msgHdr, Ci),
           mailbox: folder.prettyName,
           has_attachment: !!(msgHdr.flags & Ci.nsMsgMessageFlags.HasAttachments),
-          preview: "", // TODO: Add preview extraction
+          preview,
         });
       }
     } catch (e) {
