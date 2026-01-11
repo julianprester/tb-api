@@ -12,34 +12,41 @@ async function handleRequest(request) {
   console.log(`[tb-api] ${method} ${path}`);
 
   try {
-    // Root endpoint
+    // Root endpoint - LLM-friendly API description
     if (path === "/" && method === "GET") {
       return Utils.jsonResponse({
         name: "Thunderbird REST API",
         version: "2.0",
+        description: "REST API for Thunderbird email, calendar, and contacts. Designed for AI/LLM consumption with flexible inputs and helpful error messages.",
+        tips: [
+          "Dates accept: ISO 8601, 'today', 'tomorrow', 'yesterday', '2 days ago', 'next week'",
+          "Parameters have aliases: 'q'/'query'/'search', 'folder'/'mailbox', etc.",
+          "Errors include 'suggestions' array with actionable fixes",
+          "Calendar/addressbook can be specified by name (fuzzy matched) or ID"
+        ],
         endpoints: {
-          email: [
-            "GET /messages - Search messages",
-            "GET /messages/:id - Get message by Message-ID",
-            "POST /messages - Create draft or send",
-            "PATCH /messages - Update message flags/move",
-            "GET /mailboxes - List folders",
-            "GET /identities - List identities"
-          ],
-          calendar: [
-            "GET /calendars - List calendars",
-            "GET /events - List events",
-            "POST /events - Create event",
-            "PATCH /events/:id - Update event",
-            "DELETE /events/:id - Delete event"
-          ],
-          contacts: [
-            "GET /addressbooks - List address books",
-            "GET /contacts - Search contacts",
-            "POST /contacts - Create contact",
-            "PATCH /contacts/:id - Update contact",
-            "DELETE /contacts/:id - Delete contact"
-          ]
+          email: {
+            "GET /messages": "Search messages. Params: text/q, from, to, subject, mailbox/folder, after/since, before/until, limit",
+            "GET /messages/:id": "Get message by Message-ID (with or without angle brackets)",
+            "POST /messages": "Compose message. Params: to, subject, body, identity, send (true to send immediately)",
+            "PATCH /messages": "Update flags or move. Params: ids[], flags (read/unread/starred/flagged/junk), mailbox (to move)",
+            "GET /mailboxes": "List all mail folders",
+            "GET /identities": "List send-from identities"
+          },
+          calendar: {
+            "GET /calendars": "List all calendars",
+            "GET /events": "List events. Params: calendar (optional), start (default: now), end (default: +30 days)",
+            "POST /events": "Create event. Params: title, start, end, calendar (auto-selected if only one), location, description",
+            "PATCH /events/:id": "Update event. Params: calendar (required), title, start, end, location, description",
+            "DELETE /events/:id": "Delete event. Params: calendar (required)"
+          },
+          contacts: {
+            "GET /addressbooks": "List all address books",
+            "GET /contacts": "Search contacts. Params: q/query, addressbook/book (optional)",
+            "POST /contacts": "Create contact. Params: email (required), firstName, lastName, displayName, addressbook",
+            "PATCH /contacts/:id": "Update contact. Params: email, firstName, lastName, displayName",
+            "DELETE /contacts/:id": "Delete contact"
+          }
         }
       });
     }
