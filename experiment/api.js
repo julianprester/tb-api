@@ -139,7 +139,7 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
 
         // POST /events
         if (path === "/events" && method === "POST") {
-          const result = await calendar.createEvent(params, cal, Ci);
+          const result = await calendar.createEvent(params, cal, Ci, Cc);
           if (result.error) {
             sendJsonResponse(requestId, result, result.error.includes("not available") ? 503 : 400);
           } else {
@@ -152,7 +152,7 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
         if (path.startsWith("/events/") && method === "PATCH") {
           const eventId = extractPathParam(path, "/events/");
           if (eventId) {
-            const result = await calendar.updateEvent(eventId, params, cal, Ci);
+            const result = await calendar.updateEvent(eventId, params, cal, Ci, Cc);
             const status = result.error 
               ? (result.error.includes("not found") ? 404 : result.error.includes("not available") ? 503 : 400)
               : 200;

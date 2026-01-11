@@ -121,7 +121,7 @@ async function listEvents(params, cal, Ci) {
 /**
  * Create a new event
  */
-async function createEvent(params, cal, Ci) {
+async function createEvent(params, cal, Ci, Cc) {
   if (!cal) {
     return { error: "Calendar not available" };
   }
@@ -160,7 +160,8 @@ async function createEvent(params, cal, Ci) {
   }
 
   try {
-    const event = cal.createEvent();
+    // Use XPCOM to create event
+    const event = Cc["@mozilla.org/calendar/event;1"].createInstance(Ci.calIEvent);
     event.id = cal.getUUID();
     event.title = title;
 
@@ -188,7 +189,7 @@ async function createEvent(params, cal, Ci) {
 /**
  * Update an existing event
  */
-async function updateEvent(eventId, params, cal, Ci) {
+async function updateEvent(eventId, params, cal, Ci, Cc) {
   if (!cal) {
     return { error: "Calendar not available" };
   }
