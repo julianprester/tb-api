@@ -188,24 +188,112 @@ async function getMessage(messageId) {
 }
 
 /**
+ * Resolve a message reference to internal Thunderbird ID
+ * Accepts either an internal ID (number) or a Message-ID header string
+ */
+async function resolveMessageRef(ref) {
+  // If it's a number or numeric string, use directly
+  const asInt = parseInt(ref, 10);
+  if (!isNaN(asInt) && String(asInt) === String(ref)) {
+    // Verify the message exists
+    try {
+      await messenger.messages.get(asInt);
+      return { id: asInt };
+    } catch {
+      return { error: `Message not found with ID: ${ref}` };
+    }
+  }
+
+  // Otherwise, treat as Message-ID header and query
+  // Handle angle brackets and URL encoding
+  let searchId = ref;
+  if (searchId.startsWith("<") && searchId.endsWith(">")) {
+    searchId = searchId.slice(1, -1);
+  }
+  
+  const result = await messenger.messages.query({ headerMessageId: searchId });
+  if (!result.messages || result.messages.length === 0) {
+    // Try with original if we modified it
+    if (searchId !== ref) {
+      const result2 = await messenger.messages.query({ headerMessageId: ref });
+      if (result2.messages && result2.messages.length > 0) {
+        return { id: result2.messages[0].id };
+      }
+    }
+    return { error: `Message not found with Message-ID: "${ref}"` };
+  }
+  return { id: result.messages[0].id };
+}
+
+/**
+ * Prepend user text to compose body (handles both plain text and HTML)
+ */
+async function prependBodyToCompose(tabId, userText) {
+  const currentDetails = await messenger.compose.getComposeDetails(tabId);
+
+  if (currentDetails.isPlainText) {
+    // Plain text: simple prepend with separator
+    const separator = "\n\n";
+    const existingBody = currentDetails.plainTextBody || "";
+    await messenger.compose.setComposeDetails(tabId, {
+      plainTextBody: userText + separator + existingBody
+    });
+  } else {
+    // HTML: wrap user text in paragraph, prepend to HTML body
+    const separator = "<br><br>";
+    const existingBody = currentDetails.body || "";
+    // Escape HTML in user text to prevent injection
+    const escapedText = userText
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\n/g, "<br>");
+
+    // Find body tag and insert after it, or prepend to content
+    let newBody;
+    const bodyMatch = existingBody.match(/(<body[^>]*>)/i);
+    if (bodyMatch) {
+      const insertPos = bodyMatch.index + bodyMatch[0].length;
+      newBody = existingBody.slice(0, insertPos) +
+                "<p>" + escapedText + "</p>" + separator +
+                existingBody.slice(insertPos);
+    } else {
+      newBody = "<p>" + escapedText + "</p>" + separator + existingBody;
+    }
+
+    await messenger.compose.setComposeDetails(tabId, {
+      body: newBody
+    });
+  }
+}
+
+/**
  * Compose message (draft or send) with auto-recovery
+ * Supports new messages, replies (in_reply_to), and forwards (forward_of)
  */
 async function composeMessage(params) {
   // Normalize parameters
-  const normalized = Utils.normalizeParams(params, Utils.PARAM_ALIASES);
-  let { to, cc, bcc, subject, body, identity, send = false } = normalized;
+  const normalized = Utils.normalizeParams(params, {
+    ...Utils.PARAM_ALIASES,
+    in_reply_to: ["inReplyTo", "reply_to", "replyTo"],
+    forward_of: ["forwardOf", "forward"]
+  });
+  let { to, cc, bcc, subject, body, identity, send = false, in_reply_to, forward_of } = normalized;
   
   // Accept send as string "true"/"false" as well
   if (typeof send === "string") {
     send = send.toLowerCase() === "true";
   }
 
-  if (!to) {
+  // Validate: for new messages, 'to' is required; for replies/forwards it's optional
+  if (!in_reply_to && !forward_of && !to) {
     return { 
-      error: "Recipient (to) is required",
+      error: "Recipient (to) is required for new messages",
       suggestions: [
         'Provide a "to" field with an email address',
-        'Example: POST /messages {"to": "user@example.com", "subject": "Hello", "body": "Message content"}'
+        'Example: POST /messages {"to": "user@example.com", "subject": "Hello", "body": "Message content"}',
+        'For replies, use "in_reply_to" with the message_id',
+        'For forwards, use "forward_of" with the message_id'
       ]
     };
   }
@@ -245,48 +333,115 @@ async function composeMessage(params) {
     selectedIdentity = identities[0].email;
   }
 
-  const composeDetails = {
-    to: Array.isArray(to) ? to : [to],
-    subject: subject || "",
-    plainTextBody: body || "",
-    isPlainText: true
-  };
-
+  // Build compose details
+  const composeDetails = {};
+  if (to) composeDetails.to = Array.isArray(to) ? to : [to];
   if (cc) composeDetails.cc = Array.isArray(cc) ? cc : [cc];
   if (bcc) composeDetails.bcc = Array.isArray(bcc) ? bcc : [bcc];
+  if (subject) composeDetails.subject = subject;
   if (identityId) composeDetails.identityId = identityId;
 
-  const tab = await messenger.compose.beginNew(composeDetails);
+  let tab;
+  let mode = "new";
 
   try {
+    if (in_reply_to) {
+      // Reply to existing message
+      mode = "reply";
+      const resolved = await resolveMessageRef(in_reply_to);
+      if (resolved.error) {
+        return {
+          error: resolved.error,
+          suggestions: [
+            "Verify the message_id is correct",
+            "Use GET /messages to search for the message first",
+            "The message may have been deleted"
+          ]
+        };
+      }
+      
+      tab = await messenger.compose.beginReply(resolved.id, "replyToSender", composeDetails);
+      
+      // If user provided body, prepend it to the reply
+      if (body) {
+        await prependBodyToCompose(tab.id, body);
+      }
+    } else if (forward_of) {
+      // Forward existing message
+      mode = "forward";
+      const resolved = await resolveMessageRef(forward_of);
+      if (resolved.error) {
+        return {
+          error: resolved.error,
+          suggestions: [
+            "Verify the message_id is correct",
+            "Use GET /messages to search for the message first",
+            "The message may have been deleted"
+          ]
+        };
+      }
+      
+      // For forward, 'to' is required
+      if (!to) {
+        return {
+          error: "Recipient (to) is required for forwarding",
+          suggestions: [
+            'Provide a "to" field with the email address to forward to',
+            'Example: POST /messages {"forward_of": "message_id", "to": "recipient@example.com"}'
+          ]
+        };
+      }
+      
+      tab = await messenger.compose.beginForward(resolved.id, "forwardInline", composeDetails);
+      
+      // If user provided body, prepend it to the forward
+      if (body) {
+        await prependBodyToCompose(tab.id, body);
+      }
+    } else {
+      // New message - set body directly
+      mode = "new";
+      composeDetails.plainTextBody = body || "";
+      composeDetails.isPlainText = true;
+      tab = await messenger.compose.beginNew(composeDetails);
+    }
+
     if (send) {
       const sendResult = await messenger.compose.sendMessage(tab.id, { mode: "sendNow" });
       if (sendResult.messages && sendResult.messages.length > 0) {
         return {
           success: true,
-          message: "Message sent",
+          message: mode === "reply" ? "Reply sent" : mode === "forward" ? "Forward sent" : "Message sent",
           message_id: sendResult.messages[0].headerMessageId,
           from: selectedIdentity
         };
       }
-      return { success: true, message: "Message sent", from: selectedIdentity };
+      return { 
+        success: true, 
+        message: mode === "reply" ? "Reply sent" : mode === "forward" ? "Forward sent" : "Message sent",
+        from: selectedIdentity 
+      };
     } else {
       await messenger.compose.saveMessage(tab.id, { mode: "draft" });
       await messenger.tabs.remove(tab.id);
       return { 
         success: true, 
-        message: "Draft saved",
+        message: mode === "reply" ? "Reply draft saved" : mode === "forward" ? "Forward draft saved" : "Draft saved",
         from: selectedIdentity,
         hint: 'To send immediately, add "send": true to your request'
       };
     }
   } catch (e) {
-    try { await messenger.tabs.remove(tab.id); } catch {}
+    if (tab) {
+      try { await messenger.tabs.remove(tab.id); } catch {}
+    }
     return { 
       error: `Failed to ${send ? "send" : "save draft"}: ${e.message}`,
       suggestions: [
         "Check that the recipient email address is valid",
-        send ? "Try saving as draft first (omit 'send' or set to false)" : null
+        send ? "Try saving as draft first (omit 'send' or set to false)" : null,
+        in_reply_to ? "Verify the original message still exists" : null,
+        forward_of ? "Verify the original message still exists" : null
       ].filter(Boolean)
     };
   }

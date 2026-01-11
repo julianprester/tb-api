@@ -267,9 +267,9 @@ fi
 echo ""
 
 # ============================================
-# EMAIL DRAFT TEST
+# EMAIL COMPOSE TESTS (New, Reply, Forward)
 # ============================================
-echo -e "${BLUE}=== Email Compose Test ===${NC}"
+echo -e "${BLUE}=== Email Compose Tests ===${NC}"
 echo ""
 
 # Get own email from identities
@@ -278,13 +278,13 @@ IDENTITIES_RESPONSE=$(curl -s "$BASE_URL/identities")
 OWN_EMAIL=$(json_get "$IDENTITIES_RESPONSE" "email")
 
 if [ -z "$OWN_EMAIL" ]; then
-    echo -e "${YELLOW}SKIP${NC} No identity available, skipping compose test"
+    echo -e "${YELLOW}SKIP${NC} No identity available, skipping compose tests"
 else
     echo "Using identity: $OWN_EMAIL"
     echo ""
     
-    # Create message (opens compose window)
-    echo "1. Opening compose window..."
+    # Test 1: Create new message (draft)
+    echo "1. Creating new message draft..."
     COMPOSE_RESPONSE=$(json_request POST "/messages" "{
         \"to\": \"$OWN_EMAIL\",
         \"subject\": \"API Test - DELETE ME\",
@@ -292,10 +292,98 @@ else
     }")
     
     if is_success "$COMPOSE_RESPONSE"; then
-        print_result "Open compose" "true"
-        echo -e "     ${YELLOW}NOTE: A compose window opened. Save as draft (Ctrl+S) or close it.${NC}"
+        print_result "Create new draft" "true"
     else
-        print_result "Open compose" "false" "$COMPOSE_RESPONSE"
+        print_result "Create new draft" "false" "$COMPOSE_RESPONSE"
+    fi
+    
+    # Find a message to use for reply/forward tests
+    echo ""
+    echo "Finding a message to test reply/forward..."
+    # Get a message from sent or archive (more likely to exist and be safe to test with)
+    TEST_MESSAGE_RESPONSE=$(curl -s "$BASE_URL/messages?limit=1")
+    TEST_MESSAGE_ID=$(json_get "$TEST_MESSAGE_RESPONSE" "message_id")
+    TEST_INTERNAL_ID=$(echo "$TEST_MESSAGE_RESPONSE" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+msgs = data.get('messages', [])
+if msgs:
+    print(msgs[0].get('id', ''))
+" 2>/dev/null)
+    
+    if [ -z "$TEST_MESSAGE_ID" ]; then
+        echo -e "${YELLOW}SKIP${NC} No messages available, skipping reply/forward tests"
+    else
+        echo "Using message: $TEST_MESSAGE_ID (internal ID: $TEST_INTERNAL_ID)"
+        echo ""
+        
+        # Test 2: Reply to message (using message_id)
+        echo "2. Creating reply draft (using message_id)..."
+        REPLY_RESPONSE=$(json_request POST "/messages" "{
+            \"in_reply_to\": \"$TEST_MESSAGE_ID\",
+            \"body\": \"This is a test reply created by test-write-api.sh.\\n\\nPlease delete this draft.\"
+        }")
+        
+        if is_success "$REPLY_RESPONSE"; then
+            REPLY_MSG=$(json_get "$REPLY_RESPONSE" "message")
+            if echo "$REPLY_MSG" | grep -qi "reply"; then
+                print_result "Reply draft (message_id)" "true"
+            else
+                print_result "Reply draft (message_id)" "true"
+                echo "     Response: $REPLY_MSG"
+            fi
+        else
+            print_result "Reply draft (message_id)" "false" "$REPLY_RESPONSE"
+        fi
+        
+        # Test 3: Reply to message (using internal ID)
+        echo "3. Creating reply draft (using internal ID)..."
+        REPLY_INT_RESPONSE=$(json_request POST "/messages" "{
+            \"in_reply_to\": \"$TEST_INTERNAL_ID\",
+            \"body\": \"This is a test reply using internal ID.\\n\\nPlease delete this draft.\"
+        }")
+        
+        if is_success "$REPLY_INT_RESPONSE"; then
+            print_result "Reply draft (internal ID)" "true"
+        else
+            print_result "Reply draft (internal ID)" "false" "$REPLY_INT_RESPONSE"
+        fi
+        
+        # Test 4: Forward message
+        echo "4. Creating forward draft..."
+        FORWARD_RESPONSE=$(json_request POST "/messages" "{
+            \"forward_of\": \"$TEST_MESSAGE_ID\",
+            \"to\": \"$OWN_EMAIL\",
+            \"body\": \"FYI - This is a test forward created by test-write-api.sh.\\n\\nPlease delete this draft.\"
+        }")
+        
+        if is_success "$FORWARD_RESPONSE"; then
+            FORWARD_MSG=$(json_get "$FORWARD_RESPONSE" "message")
+            if echo "$FORWARD_MSG" | grep -qi "forward"; then
+                print_result "Forward draft" "true"
+            else
+                print_result "Forward draft" "true"
+                echo "     Response: $FORWARD_MSG"
+            fi
+        else
+            print_result "Forward draft" "false" "$FORWARD_RESPONSE"
+        fi
+        
+        # Test 5: Forward without recipient (should fail)
+        echo "5. Testing forward without recipient (should fail)..."
+        FORWARD_FAIL_RESPONSE=$(json_request POST "/messages" "{
+            \"forward_of\": \"$TEST_MESSAGE_ID\",
+            \"body\": \"This should fail - no recipient\"
+        }")
+        
+        if is_error "$FORWARD_FAIL_RESPONSE"; then
+            print_result "Forward without recipient (expected error)" "true"
+        else
+            print_result "Forward without recipient (expected error)" "false" "Should have returned an error"
+        fi
+        
+        echo ""
+        echo -e "     ${YELLOW}NOTE: Draft windows may have opened. Close them or save/delete the drafts.${NC}"
     fi
 fi
 
