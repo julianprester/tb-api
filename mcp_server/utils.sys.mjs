@@ -50,16 +50,16 @@ export function sendJson(response, httpVersion, data, status = 200) {
   response.setHeader("Content-Type", "application/json; charset=utf-8", false);
   
   const jsonString = JSON.stringify(data, null, 2);
-  // Convert to UTF-8 bytes for proper encoding of non-ASCII characters
+  // Encode string as UTF-8 bytes and write to output stream
+  // response.write() only handles Latin-1 correctly, so we need to
+  // convert UTF-8 bytes back to a "binary string" for proper output
   const encoder = new TextEncoder();
   const utf8Bytes = encoder.encode(jsonString);
-  
-  // Write bytes using bodyOutputStream
-  const outputStream = response.bodyOutputStream;
-  outputStream.write(
-    Array.from(utf8Bytes, byte => String.fromCharCode(byte)).join(""),
-    utf8Bytes.length
-  );
+  let binaryString = "";
+  for (let i = 0; i < utf8Bytes.length; i++) {
+    binaryString += String.fromCharCode(utf8Bytes[i]);
+  }
+  response.write(binaryString);
 }
 
 /**
