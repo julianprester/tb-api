@@ -4,6 +4,45 @@
 import { sanitizeForJson } from "resource://tb-api/mcp_server/utils.sys.mjs";
 
 const MAX_RESULTS = 100;
+
+/**
+ * Parse email address list, respecting quoted strings
+ * Handles: "Name, With Comma" <email@example.com>, Another <another@example.com>
+ */
+function parseAddressList(addressString) {
+  if (!addressString) return [];
+  
+  const addresses = [];
+  let current = "";
+  let inQuotes = false;
+  let inAngleBrackets = false;
+  
+  for (let i = 0; i < addressString.length; i++) {
+    const char = addressString[i];
+    
+    if (char === '"' && addressString[i - 1] !== '\\') {
+      inQuotes = !inQuotes;
+      current += char;
+    } else if (char === '<' && !inQuotes) {
+      inAngleBrackets = true;
+      current += char;
+    } else if (char === '>' && !inQuotes) {
+      inAngleBrackets = false;
+      current += char;
+    } else if (char === ',' && !inQuotes && !inAngleBrackets) {
+      const trimmed = current.trim();
+      if (trimmed) addresses.push(trimmed);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  
+  const trimmed = current.trim();
+  if (trimmed) addresses.push(trimmed);
+  
+  return addresses;
+}
 const DEFAULT_LIMIT = 50;
 const PREVIEW_LENGTH = 300;
 
@@ -235,8 +274,8 @@ export function getMessage(messageId, MailServices, MsgHdrToMimeMessage, Ci) {
                   message_id: msgHdr.messageId,
                   date: msgHdr.date ? new Date(msgHdr.date / 1000).toISOString() : null,
                   from: msgHdr.mime2DecodedAuthor || msgHdr.author,
-                  to: (msgHdr.mime2DecodedRecipients || msgHdr.recipients || "").split(",").map(s => s.trim()).filter(Boolean),
-                  cc: (msgHdr.ccList || "").split(",").map(s => s.trim()).filter(Boolean),
+                  to: parseAddressList(msgHdr.mime2DecodedRecipients || msgHdr.recipients),
+                  cc: parseAddressList(msgHdr.ccList),
                   subject: msgHdr.mime2DecodedSubject || msgHdr.subject,
                   flags: msgHdrToFlags(msgHdr, Ci),
                   mailbox: folder.prettyName,
