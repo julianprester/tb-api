@@ -10,7 +10,7 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
     // Load HttpServer via loadSubScript (httpd.js is not an ES module)
     const httpdScope = {};
     Services.scriptloader.loadSubScript(
-      context.extension.rootURI.resolve("experiment/httpd.js"),
+      context.extension.rootURI.resolve("lib/httpd.js"),
       httpdScope
     );
     const { HttpServer } = httpdScope;
@@ -18,7 +18,7 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
     // Import calendar module
     const calendarScope = {};
     Services.scriptloader.loadSubScript(
-      context.extension.rootURI.resolve("experiment/calendar.js"),
+      context.extension.rootURI.resolve("api/calendar.js"),
       calendarScope
     );
     const calendar = calendarScope;

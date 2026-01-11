@@ -23,9 +23,9 @@
   "background": {
     "scripts": [
       "lib/ical.js",
-      "lib/utils.js",
-      "lib/email.js",
-      "lib/contacts.js",
+      "api/utils.js",
+      "api/email.js",
+      "api/contacts.js",
       "background.js"
     ]
   },
