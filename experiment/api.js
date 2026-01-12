@@ -10,6 +10,21 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
     super(extension);
     this.server = null;
     this.pendingRequests = new Map();
+    this.apiToken = null;
+    
+    // Read API token from environment variable
+    try {
+      const dominated = Cc["@mozilla.org/process/environment;1"]
+        .getService(Ci.nsIEnvironment);
+      this.apiToken = dominated.get("TB_API_TOKEN") || null;
+      if (this.apiToken) {
+        console.log("[tb-api] API token configured from TB_API_TOKEN environment variable");
+      } else {
+        console.log("[tb-api] No TB_API_TOKEN set - authentication disabled");
+      }
+    } catch (e) {
+      console.error("[tb-api] Failed to read environment variable:", e);
+    }
   }
 
   getAPI(context) {
@@ -193,6 +208,34 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
           self.server.registerPrefixHandler("/", (request, response) => {
             const requestId = String(++requestCounter);
             response.processAsync();
+
+            // Check authentication if token is configured
+            if (self.apiToken) {
+              let authHeader = "";
+              try {
+                authHeader = request.getHeader("Authorization") || "";
+              } catch (e) {
+                // Header not present
+              }
+              
+              const expectedToken = `Bearer ${self.apiToken}`;
+              if (authHeader !== expectedToken) {
+                response.setStatusLine(request.httpVersion, 401, "Unauthorized");
+                response.setHeader("Content-Type", "application/json; charset=utf-8", false);
+                response.setHeader("WWW-Authenticate", "Bearer", false);
+                
+                const cos = Cc["@mozilla.org/intl/converter-output-stream;1"]
+                  .createInstance(Ci.nsIConverterOutputStream);
+                cos.init(response.bodyOutputStream, "UTF-8");
+                cos.writeString(JSON.stringify({
+                  error: "Unauthorized",
+                  message: "Valid Bearer token required in Authorization header"
+                }));
+                cos.close();
+                response.finish();
+                return;
+              }
+            }
 
             // Read body for POST/PATCH
             let body = "";
