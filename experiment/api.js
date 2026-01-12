@@ -6,7 +6,16 @@ var { ExtensionCommon } = ChromeUtils.importESModule(
 );
 
 var httpServer = class extends ExtensionCommon.ExtensionAPI {
+  constructor(extension) {
+    super(extension);
+    this.server = null;
+    this.pendingRequests = new Map();
+  }
+
   getAPI(context) {
+    // Store reference to this for use in API methods
+    const self = this;
+
     // Load HttpServer via loadSubScript (httpd.js is not an ES module)
     const httpdScope = {};
     Services.scriptloader.loadSubScript(
@@ -34,8 +43,6 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
       console.log("[tb-api] Calendar not available");
     }
 
-    let server = null;
-    let pendingRequests = new Map();
     let requestCounter = 0;
     let onRequestFire = null;
 
@@ -43,10 +50,10 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
      * Write response body and finish the HTTP response
      */
     function writeResponse(requestId, statusCode, body) {
-      const pending = pendingRequests.get(requestId);
+      const pending = self.pendingRequests.get(requestId);
       if (!pending) return false;
 
-      pendingRequests.delete(requestId);
+      self.pendingRequests.delete(requestId);
       const { response, httpVersion } = pending;
 
       response.setStatusLine(httpVersion, statusCode, "OK");
@@ -176,14 +183,14 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
     return {
       httpServer: {
         async start(port) {
-          if (server) {
+          if (self.server) {
             throw new Error("Server already running");
           }
 
-          server = new HttpServer();
+          self.server = new HttpServer();
 
           // Catch-all handler
-          server.registerPrefixHandler("/", (request, response) => {
+          self.server.registerPrefixHandler("/", (request, response) => {
             const requestId = String(++requestCounter);
             response.processAsync();
 
@@ -199,7 +206,7 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
               }
             }
 
-            pendingRequests.set(requestId, {
+            self.pendingRequests.set(requestId, {
               response,
               httpVersion: request.httpVersion
             });
@@ -226,16 +233,16 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
             }
           });
 
-          server._identity._primaryHost = "127.0.0.1";
-          server.start(port);
+          self.server._identity._primaryHost = "127.0.0.1";
+          self.server.start(port);
           console.log(`[tb-api] HTTP server started on port ${port}`);
         },
 
         async stop() {
-          if (server) {
-            await new Promise(resolve => server.stop(resolve));
-            server = null;
-            pendingRequests.clear();
+          if (self.server) {
+            await new Promise(resolve => self.server.stop(resolve));
+            self.server = null;
+            self.pendingRequests.clear();
             console.log("[tb-api] HTTP server stopped");
           }
         },
@@ -261,6 +268,14 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
   }
 
   close() {
-    // Cleanup
+    // Stop the HTTP server when extension is unloaded
+    if (this.server) {
+      console.log("[tb-api] Shutting down HTTP server...");
+      this.server.stop(() => {
+        console.log("[tb-api] HTTP server stopped on extension close");
+      });
+      this.server = null;
+      this.pendingRequests.clear();
+    }
   }
 };
