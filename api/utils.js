@@ -123,8 +123,8 @@ const PARAM_ALIASES = {
   before: ["until", "to_date", "toDate", "end", "endDate"],
   limit: ["max", "count", "size", "maxResults"],
   
-  // Message compose
-  body: ["content", "text", "message"],
+  // Message compose (note: "text" removed as alias to avoid conflict with email search)
+  body: ["content", "message"],
   subject: ["title", "subj"],
   
   // Contacts

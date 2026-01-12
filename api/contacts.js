@@ -126,7 +126,8 @@ async function searchContacts(params) {
   // Normalize parameters
   const normalized = Utils.normalizeParams(params, Utils.PARAM_ALIASES);
   const { q, addressbook, limit = 50 } = normalized;
-  const maxResults = Math.min(parseInt(limit, 10) || 50, 100);
+  const parsedLimit = parseInt(limit, 10);
+  const maxResults = Math.min(Math.max(parsedLimit > 0 ? parsedLimit : 50, 1), 100);
 
   // Build query
   const queryInfo = {};
