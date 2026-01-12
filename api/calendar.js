@@ -101,7 +101,9 @@ function normalizeCalendarParams(params) {
     start: ["startDate", "start_date", "startTime", "start_time", "from", "begin"],
     end: ["endDate", "end_date", "endTime", "end_time", "to", "until"],
     location: ["place", "where", "loc"],
-    description: ["desc", "details", "notes", "body", "content"]
+    description: ["desc", "details", "notes", "body", "content"],
+    organizer: ["host", "owner", "creator"],
+    attendees: ["participants", "invitees", "guests", "people"]
   };
   
   const normalized = { ...params };
@@ -204,11 +206,45 @@ function findCalendar(calendarId, cal) {
 }
 
 /**
+ * Convert attendee object to API format
+ */
+function attendeeToObject(attendee) {
+  return {
+    email: (attendee.id || "").replace(/^mailto:/i, ""),
+    name: attendee.commonName || null,
+    role: attendee.role || "REQ-PARTICIPANT",
+    status: attendee.participationStatus || "NEEDS-ACTION",
+    type: attendee.userType || "INDIVIDUAL",
+    rsvp: attendee.rsvp === "TRUE"
+  };
+}
+
+/**
  * Convert calendar item to event object
  */
 function itemToEvent(item, calendarId) {
   const startMs = item.startDate?.nativeTime ? item.startDate.nativeTime / 1000 : null;
   const endMs = item.endDate?.nativeTime ? item.endDate.nativeTime / 1000 : null;
+
+  // Get organizer
+  let organizer = null;
+  if (item.organizer) {
+    organizer = {
+      email: (item.organizer.id || "").replace(/^mailto:/i, ""),
+      name: item.organizer.commonName || null
+    };
+  }
+
+  // Get attendees
+  let attendees = null;
+  try {
+    const attendeeList = item.getAttendees ? item.getAttendees() : [];
+    if (attendeeList && attendeeList.length > 0) {
+      attendees = attendeeList.map(attendeeToObject);
+    }
+  } catch (e) {
+    // Ignore errors getting attendees
+  }
 
   return {
     id: item.id,
@@ -218,6 +254,8 @@ function itemToEvent(item, calendarId) {
     end: endMs ? new Date(endMs).toISOString() : null,
     location: item.getProperty("LOCATION") || null,
     description: item.getProperty("DESCRIPTION") || null,
+    organizer,
+    attendees
   };
 }
 
@@ -326,7 +364,7 @@ async function createEvent(params, cal, Ci, Cc) {
 
   // Normalize parameter names
   const normalized = normalizeCalendarParams(params);
-  let { calendar: calendarId, title, start, end, location, description } = normalized;
+  let { calendar: calendarId, title, start, end, location, description, organizer, attendees } = normalized;
 
   // Validate required fields with helpful errors
   if (!title) {
@@ -436,9 +474,74 @@ async function createEvent(params, cal, Ci, Cc) {
     if (location) event.setProperty("LOCATION", location);
     if (description) event.setProperty("DESCRIPTION", description);
 
+    // Add organizer if provided
+    if (organizer) {
+      const org = Cc["@mozilla.org/calendar/attendee;1"].createInstance(Ci.calIAttendee);
+      const orgEmail = typeof organizer === "string" ? organizer : organizer.email;
+      const orgName = typeof organizer === "string" ? null : (organizer.name || null);
+      
+      if (!orgEmail) {
+        return {
+          error: "Organizer email is required",
+          suggestions: [
+            'Provide organizer as string "email@example.com" or object {"email": "...", "name": "..."}'
+          ]
+        };
+      }
+      
+      org.id = "mailto:" + orgEmail;
+      if (orgName) org.commonName = orgName;
+      org.isOrganizer = true;
+      org.role = "CHAIR";
+      event.organizer = org;
+    }
+
+    // Add attendees if provided
+    if (attendees) {
+      if (!Array.isArray(attendees)) {
+        return {
+          error: "Attendees must be an array",
+          suggestions: [
+            'Provide attendees as array: [{"email": "...", "name": "..."}, ...]',
+            'Or simplified: ["email1@example.com", "email2@example.com"]'
+          ]
+        };
+      }
+
+      for (const att of attendees) {
+        const attendee = Cc["@mozilla.org/calendar/attendee;1"].createInstance(Ci.calIAttendee);
+        
+        // Support both string (just email) and object format
+        const attEmail = typeof att === "string" ? att : att.email;
+        const attName = typeof att === "string" ? null : (att.name || null);
+        const attRole = typeof att === "string" ? "REQ-PARTICIPANT" : (att.role || "REQ-PARTICIPANT");
+        const attStatus = typeof att === "string" ? "NEEDS-ACTION" : (att.status || "NEEDS-ACTION");
+        const attRsvp = typeof att === "string" ? true : (att.rsvp !== false);
+        
+        if (!attEmail) {
+          return {
+            error: "Each attendee must have an email address",
+            suggestions: [
+              'Provide attendee as string "email@example.com" or object {"email": "...", "name": "..."}'
+            ]
+          };
+        }
+        
+        attendee.id = "mailto:" + attEmail;
+        if (attName) attendee.commonName = attName;
+        attendee.role = attRole;
+        attendee.participationStatus = attStatus;
+        attendee.userType = "INDIVIDUAL";
+        attendee.rsvp = attRsvp ? "TRUE" : "FALSE";
+        
+        event.addAttendee(attendee);
+      }
+    }
+
     await found.calendar.addItem(event);
 
-    return {
+    // Build response
+    const response = {
       success: true,
       message: "Event created",
       id: event.id,
@@ -447,6 +550,28 @@ async function createEvent(params, cal, Ci, Cc) {
       start: startDate.toISOString(),
       end: endDate.toISOString()
     };
+
+    if (organizer) {
+      response.organizer = typeof organizer === "string" 
+        ? { email: organizer } 
+        : { email: organizer.email, name: organizer.name || null };
+    }
+
+    if (attendees && attendees.length > 0) {
+      response.attendees = attendees.map(att => {
+        if (typeof att === "string") {
+          return { email: att, status: "NEEDS-ACTION" };
+        }
+        return { 
+          email: att.email, 
+          name: att.name || null,
+          status: att.status || "NEEDS-ACTION"
+        };
+      });
+      response.note = "Invitation emails are NOT automatically sent. Calendar provider may handle scheduling if configured.";
+    }
+
+    return response;
   } catch (e) {
     return { error: `Failed to create event: ${e.message}` };
   }
@@ -466,7 +591,7 @@ async function updateEvent(eventId, params, cal, Ci, Cc) {
 
   // Normalize parameter names
   const normalized = normalizeCalendarParams(params);
-  const { calendar: calendarId, title, start, end, location, description } = normalized;
+  const { calendar: calendarId, title, start, end, location, description, organizer, attendees } = normalized;
 
   if (!calendarId) {
     // Try to help by listing calendars
@@ -540,14 +665,97 @@ async function updateEvent(eventId, params, cal, Ci, Cc) {
     if (location !== undefined) newEvent.setProperty("LOCATION", location);
     if (description !== undefined) newEvent.setProperty("DESCRIPTION", description);
 
+    // Update organizer if provided
+    if (organizer !== undefined) {
+      if (organizer === null) {
+        // Remove organizer
+        newEvent.organizer = null;
+      } else {
+        const org = Cc["@mozilla.org/calendar/attendee;1"].createInstance(Ci.calIAttendee);
+        const orgEmail = typeof organizer === "string" ? organizer : organizer.email;
+        const orgName = typeof organizer === "string" ? null : (organizer.name || null);
+        
+        if (!orgEmail) {
+          return {
+            error: "Organizer email is required",
+            suggestions: [
+              'Provide organizer as string "email@example.com" or object {"email": "...", "name": "..."}'
+            ]
+          };
+        }
+        
+        org.id = "mailto:" + orgEmail;
+        if (orgName) org.commonName = orgName;
+        org.isOrganizer = true;
+        org.role = "CHAIR";
+        newEvent.organizer = org;
+      }
+    }
+
+    // Update attendees if provided
+    if (attendees !== undefined) {
+      // Remove all existing attendees first
+      try {
+        newEvent.removeAllAttendees();
+      } catch (e) {
+        // Method might not exist in all versions
+        const existing = newEvent.getAttendees ? newEvent.getAttendees() : [];
+        for (const att of existing) {
+          try { newEvent.removeAttendee(att); } catch (e2) { /* ignore */ }
+        }
+      }
+      
+      // Add new attendees (if not null/empty)
+      if (attendees && Array.isArray(attendees) && attendees.length > 0) {
+        for (const att of attendees) {
+          const attendee = Cc["@mozilla.org/calendar/attendee;1"].createInstance(Ci.calIAttendee);
+          
+          const attEmail = typeof att === "string" ? att : att.email;
+          const attName = typeof att === "string" ? null : (att.name || null);
+          const attRole = typeof att === "string" ? "REQ-PARTICIPANT" : (att.role || "REQ-PARTICIPANT");
+          const attStatus = typeof att === "string" ? "NEEDS-ACTION" : (att.status || "NEEDS-ACTION");
+          const attRsvp = typeof att === "string" ? true : (att.rsvp !== false);
+          
+          if (!attEmail) continue;
+          
+          attendee.id = "mailto:" + attEmail;
+          if (attName) attendee.commonName = attName;
+          attendee.role = attRole;
+          attendee.participationStatus = attStatus;
+          attendee.userType = "INDIVIDUAL";
+          attendee.rsvp = attRsvp ? "TRUE" : "FALSE";
+          
+          newEvent.addAttendee(attendee);
+        }
+      }
+    }
+
     await found.calendar.modifyItem(newEvent, event);
 
-    return { 
+    // Build response
+    const response = { 
       success: true, 
       message: "Event updated",
       id: eventId,
       title: newEvent.title
     };
+
+    if (organizer !== undefined) {
+      response.organizer = organizer === null ? null : (
+        typeof organizer === "string" 
+          ? { email: organizer } 
+          : { email: organizer.email, name: organizer.name || null }
+      );
+    }
+
+    if (attendees !== undefined) {
+      response.attendees = (attendees || []).map(att => {
+        if (typeof att === "string") return { email: att };
+        return { email: att.email, name: att.name || null };
+      });
+    }
+
+    return response;
   } catch (e) {
     return { error: `Failed to update event: ${e.message}` };
   }

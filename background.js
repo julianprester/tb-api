@@ -35,9 +35,9 @@ async function handleRequest(request) {
           },
           calendar: {
             "GET /calendars": "List all calendars",
-            "GET /events": "List events. Params: calendar (optional), start (default: now), end (default: +30 days)",
-            "POST /events": "Create event. Params: title, start, end, calendar (auto-selected if only one), location, description",
-            "PATCH /events/:id": "Update event. Params: calendar (required), title, start, end, location, description",
+            "GET /events": "List events. Params: calendar (optional), start (default: now), end (default: +30 days). Returns organizer/attendees if present.",
+            "POST /events": "Create event. Params: title, start, end, calendar, location, description, organizer (email or {email,name}), attendees ([{email,name,role,status}] or [emails])",
+            "PATCH /events/:id": "Update event. Params: calendar (required), title, start, end, location, description, organizer, attendees (replaces all)",
             "DELETE /events/:id": "Delete event. Params: calendar (required)"
           },
           contacts: {
