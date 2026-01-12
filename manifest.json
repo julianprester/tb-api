@@ -1,12 +1,12 @@
 {
-  "manifest_version": 3,
+  "manifest_version": 2,
   "name": "Thunderbird API",
   "version": "2.0",
   "description": "REST API for AI assistants to access email, contacts, and calendars",
   "browser_specific_settings": {
     "gecko": {
       "id": "tb-api@julianprester.com",
-      "strict_min_version": "128.0"
+      "strict_min_version": "115.0"
     }
   },
   "permissions": [
@@ -22,12 +22,12 @@
   ],
   "background": {
     "scripts": [
-      "lib/ical.js",
       "api/utils.js",
       "api/email.js",
       "api/contacts.js",
       "background.js"
-    ]
+    ],
+    "persistent": true
   },
   "experiment_apis": {
     "httpServer": {

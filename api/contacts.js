@@ -1,66 +1,13 @@
 "use strict";
 
 /**
- * Contacts operations using WebExtension APIs (MV3)
- * Uses messenger.addressBooks and messenger.addressBooks.contacts with vCard
+ * Contacts operations using WebExtension APIs (MV2)
+ * Uses messenger.contacts API with properties format
  * Designed for LLM consumption with flexible inputs and helpful errors
  */
 
 // Cache for address books (for suggestions)
 let addressBookCache = null;
-
-/**
- * Build vCard string from contact properties using ical.js
- */
-function buildVCard(email, firstName, lastName, displayName) {
-  const card = new ICAL.Component("vcard");
-  card.addPropertyWithValue("version", "4.0");
-  
-  // FN (formatted name) is required
-  const fn = displayName || [firstName, lastName].filter(Boolean).join(" ") || email;
-  card.addPropertyWithValue("fn", fn);
-  
-  // N (structured name)
-  if (firstName || lastName) {
-    const n = card.addPropertyWithValue("n", [lastName || "", firstName || "", "", "", ""]);
-  }
-  
-  // EMAIL
-  if (email) {
-    card.addPropertyWithValue("email", email);
-  }
-  
-  return card.toString();
-}
-
-/**
- * Parse vCard string and extract properties using ical.js
- */
-function parseVCard(vCardString) {
-  try {
-    const card = new ICAL.Component(ICAL.parse(vCardString));
-    
-    const fn = card.getFirstPropertyValue("fn");
-    const email = card.getFirstPropertyValue("email");
-    const n = card.getFirstPropertyValue("n");
-    
-    let firstName = null;
-    let lastName = null;
-    if (n && Array.isArray(n)) {
-      lastName = n[0] || null;
-      firstName = n[1] || null;
-    }
-    
-    return {
-      displayName: fn || null,
-      email: email || null,
-      firstName,
-      lastName
-    };
-  } catch (e) {
-    return { displayName: null, email: null, firstName: null, lastName: null };
-  }
-}
 
 /**
  * List address books (also updates cache for suggestions)
@@ -129,18 +76,34 @@ async function searchContacts(params) {
   const parsedLimit = parseInt(limit, 10);
   const maxResults = Math.min(Math.max(parsedLimit > 0 ? parsedLimit : 50, 1), 100);
 
-  // Build query
-  const queryInfo = {};
-  if (q) queryInfo.searchString = q;
-  
-  // Resolve address book if specified
+  let contacts = [];
+
+  // Get contacts from specific address book or all
   if (addressbook) {
     const resolved = await resolveAddressBookWithSuggestions(addressbook);
     if (resolved.error) return resolved;
-    queryInfo.parentId = resolved.id;
+    contacts = await messenger.contacts.list(resolved.id);
+  } else {
+    const books = addressBookCache || (await messenger.addressBooks.list());
+    if (!addressBookCache) addressBookCache = books;
+    
+    for (const book of books) {
+      const bookContacts = await messenger.contacts.list(book.id);
+      contacts.push(...bookContacts);
+    }
   }
 
-  let contacts = await messenger.addressBooks.contacts.query(queryInfo);
+  // Filter by query
+  if (q) {
+    const lower = q.toLowerCase();
+    contacts = contacts.filter(c => {
+      const props = c.properties || {};
+      return (props.PrimaryEmail || "").toLowerCase().includes(lower) ||
+             (props.DisplayName || "").toLowerCase().includes(lower) ||
+             (props.FirstName || "").toLowerCase().includes(lower) ||
+             (props.LastName || "").toLowerCase().includes(lower);
+    });
+  }
 
   // Provide helpful feedback if no results
   if (contacts.length === 0) {
@@ -229,10 +192,24 @@ async function createContact(params) {
     };
   }
 
-  const vCard = buildVCard(email, firstName, lastName, displayName);
+  // Build properties object (MV2 format)
+  const properties = {
+    PrimaryEmail: email
+  };
+
+  if (firstName) properties.FirstName = firstName;
+  if (lastName) properties.LastName = lastName;
+  if (displayName) {
+    properties.DisplayName = displayName;
+  } else if (firstName || lastName) {
+    properties.DisplayName = [firstName, lastName].filter(Boolean).join(" ");
+  } else {
+    properties.DisplayName = email;
+  }
 
   try {
-    const id = await messenger.addressBooks.contacts.create(addressbook, vCard);
+    // MV2 API: messenger.contacts.create(parentId, id, properties)
+    const id = await messenger.contacts.create(addressbook, null, properties);
     return { 
       success: true, 
       message: "Contact created", 
@@ -241,7 +218,7 @@ async function createContact(params) {
         email,
         firstName: firstName || null,
         lastName: lastName || null,
-        displayName: displayName || [firstName, lastName].filter(Boolean).join(" ") || email
+        displayName: properties.DisplayName
       }
     };
   } catch (e) {
@@ -264,7 +241,7 @@ async function updateContact(contactId, params) {
   const { email, firstName, lastName, displayName } = normalized;
 
   try {
-    const contact = await messenger.addressBooks.contacts.get(contactId);
+    const contact = await messenger.contacts.get(contactId);
     if (!contact) {
       return { 
         error: `Contact not found: ${contactId}`,
@@ -275,15 +252,6 @@ async function updateContact(contactId, params) {
       };
     }
 
-    // Parse existing vCard to get current values
-    const existing = contact.vCard ? parseVCard(contact.vCard) : {};
-    
-    // Merge with updates
-    const newEmail = email !== undefined ? email : existing.email || "";
-    const newFirstName = firstName !== undefined ? firstName : existing.firstName || "";
-    const newLastName = lastName !== undefined ? lastName : existing.lastName || "";
-    const newDisplayName = displayName !== undefined ? displayName : existing.displayName || "";
-
     // Validate email if being updated
     if (email !== undefined && !email.includes("@")) {
       return {
@@ -292,17 +260,24 @@ async function updateContact(contactId, params) {
       };
     }
 
-    const vCard = buildVCard(newEmail, newFirstName, newLastName, newDisplayName);
-    await messenger.addressBooks.contacts.update(contactId, vCard);
+    // Build properties object with updates (MV2 format)
+    const properties = {};
+    if (email !== undefined) properties.PrimaryEmail = email;
+    if (firstName !== undefined) properties.FirstName = firstName;
+    if (lastName !== undefined) properties.LastName = lastName;
+    if (displayName !== undefined) properties.DisplayName = displayName;
+
+    // MV2 API: messenger.contacts.update(id, properties)
+    await messenger.contacts.update(contactId, properties);
 
     return { 
       success: true, 
       message: "Contact updated",
       contact: {
-        email: newEmail,
-        firstName: newFirstName || null,
-        lastName: newLastName || null,
-        displayName: newDisplayName || null
+        email: email !== undefined ? email : (contact.properties?.PrimaryEmail || null),
+        firstName: firstName !== undefined ? firstName : (contact.properties?.FirstName || null),
+        lastName: lastName !== undefined ? lastName : (contact.properties?.LastName || null),
+        displayName: displayName !== undefined ? displayName : (contact.properties?.DisplayName || null)
       }
     };
   } catch (e) {
@@ -323,7 +298,7 @@ async function deleteContact(contactId) {
   try {
     // First verify contact exists
     try {
-      await messenger.addressBooks.contacts.get(contactId);
+      await messenger.contacts.get(contactId);
     } catch (e) {
       return {
         error: `Contact not found: ${contactId}`,
@@ -334,7 +309,7 @@ async function deleteContact(contactId) {
       };
     }
     
-    await messenger.addressBooks.contacts.delete(contactId);
+    await messenger.contacts.delete(contactId);
     return { success: true, message: "Contact deleted" };
   } catch (e) {
     return { 
@@ -350,20 +325,6 @@ async function deleteContact(contactId) {
 // Helper functions
 
 function formatContact(contact) {
-  // MV3: ContactNode has vCard property instead of properties
-  if (contact.vCard) {
-    const parsed = parseVCard(contact.vCard);
-    return {
-      id: contact.id,
-      addressbook: contact.parentId,
-      email: parsed.email,
-      displayName: parsed.displayName,
-      firstName: parsed.firstName,
-      lastName: parsed.lastName
-    };
-  }
-  
-  // Fallback for any remaining properties format
   const props = contact.properties || {};
   return {
     id: contact.id,
