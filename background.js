@@ -36,7 +36,7 @@ async function handleRequest(request) {
           calendar: {
             "GET /calendars": "List all calendars",
             "GET /events": "List events. Params: calendar (optional), start (default: now), end (default: +30 days). Returns organizer/attendees if present.",
-            "POST /events": "Create event. Params: title, start, end, calendar, location, description, organizer (email or {email,name}), attendees ([{email,name,role,status}] or [emails])",
+            "POST /events": "Create event. Params: title, start, end, calendar, location, description, organizer, attendees, sendInvites (bool: send invitation emails)",
             "PATCH /events/:id": "Update event. Params: calendar (required), title, start, end, location, description, organizer, attendees (replaces all)",
             "DELETE /events/:id": "Delete event. Params: calendar (required)"
           },
@@ -115,6 +115,66 @@ async function handleRequest(request) {
 browser.httpServer.onRequest.addListener(async (request) => {
   const response = await handleRequest(request);
   browser.httpServer.sendResponse(request.id, response.statusCode, response.body);
+});
+
+// Listen for invitation sending requests from experiment
+browser.httpServer.onSendInvitation.addListener(async (invitation) => {
+  console.log(`[tb-api] Sending calendar invitations for: ${invitation.eventTitle}`);
+  
+  try {
+    // Find an identity to send from (prefer one matching organizer email)
+    const identities = await messenger.identities.list();
+    let sendIdentity = identities.find(id => id.email === invitation.organizerEmail);
+    if (!sendIdentity && identities.length > 0) {
+      sendIdentity = identities[0];
+      console.log(`[tb-api] Organizer email ${invitation.organizerEmail} not found in identities, using ${sendIdentity.email}`);
+    }
+    
+    if (!sendIdentity) {
+      console.error("[tb-api] No email identity available to send invitations");
+      return;
+    }
+
+    // Create the invitation email body
+    const bodyText = `You have been invited to: ${invitation.eventTitle}
+
+Please find the calendar invitation attached.
+
+This invitation was sent via Thunderbird REST API.`;
+
+    // Create compose details
+    const composeDetails = {
+      identityId: sendIdentity.id,
+      to: invitation.recipients,
+      subject: invitation.subject,
+      body: bodyText,
+      type: "new"
+    };
+
+    // Create the compose window
+    const tab = await messenger.compose.beginNew(composeDetails);
+    
+    // Add the ICS attachment
+    // Create a File-like object from the ICS content
+    const icsBlob = new Blob([invitation.icsContent], { type: "text/calendar; method=REQUEST" });
+    const icsFile = new File([icsBlob], "invite.ics", { type: "text/calendar" });
+    
+    await messenger.compose.addAttachment(tab.id, {
+      file: icsFile,
+      name: "invite.ics"
+    });
+
+    // Send the message
+    const sendResult = await messenger.compose.sendMessage(tab.id, { mode: "sendNow" });
+    
+    if (sendResult.mode === "sendNow") {
+      console.log(`[tb-api] Invitation emails sent to: ${invitation.recipients.join(", ")}`);
+    } else {
+      console.log(`[tb-api] Invitation email queued (mode: ${sendResult.mode})`);
+    }
+  } catch (e) {
+    console.error("[tb-api] Failed to send invitation emails:", e);
+  }
 });
 
 // Start server

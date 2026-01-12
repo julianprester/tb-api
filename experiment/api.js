@@ -67,6 +67,7 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
 
     let requestCounter = 0;
     let onRequestFire = null;
+    let onSendInvitationFire = null;
 
     /**
      * Write response body and finish the HTTP response
@@ -171,7 +172,31 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
 
         // POST /events
         if (path === "/events" && method === "POST") {
-          sendCalendarResponse(requestId, await calendar.createEvent(params, cal, Ci, Cc));
+          const result = await calendar.createEvent(params, cal, Ci, Cc);
+          
+          // Check if invitations need to be sent
+          if (result._invitationData && onSendInvitationFire) {
+            const invData = result._invitationData;
+            // Fire event for background script to send invitations
+            onSendInvitationFire.async({
+              recipients: invData.recipients,
+              subject: invData.subject,
+              icsContent: invData.icsContent,
+              organizerEmail: invData.organizerEmail,
+              eventTitle: result.title
+            });
+            // Update response to indicate invites are being sent
+            delete result._invitationData;
+            result.invitesSent = true;
+            delete result.invitesPending;
+          } else if (result._invitationData) {
+            // No listener registered
+            delete result._invitationData;
+            result.warning = "Invitation sending not available (no listener)";
+            delete result.invitesPending;
+          }
+          
+          sendCalendarResponse(requestId, result);
           return;
         }
 
@@ -313,6 +338,17 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
             onRequestFire = fire;
             return () => {
               onRequestFire = null;
+            };
+          }
+        }).api(),
+
+        onSendInvitation: new ExtensionCommon.EventManager({
+          context,
+          name: "httpServer.onSendInvitation",
+          register: fire => {
+            onSendInvitationFire = fire;
+            return () => {
+              onSendInvitationFire = null;
             };
           }
         }).api()

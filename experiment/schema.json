@@ -57,6 +57,24 @@
             }
           }
         ]
+      },
+      {
+        "name": "onSendInvitation",
+        "type": "function",
+        "description": "Fired when calendar invitations need to be sent",
+        "parameters": [
+          {
+            "name": "invitation",
+            "type": "object",
+            "properties": {
+              "recipients": { "type": "array", "items": { "type": "string" } },
+              "subject": { "type": "string" },
+              "icsContent": { "type": "string" },
+              "organizerEmail": { "type": "string" },
+              "eventTitle": { "type": "string" }
+            }
+          }
+        ]
       }
     ]
   }
