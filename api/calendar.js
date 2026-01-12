@@ -92,95 +92,6 @@ function parseFlexibleDate(dateStr) {
 }
 
 /**
- * Format date as iCalendar datetime (YYYYMMDDTHHMMSSZ)
- */
-function formatIcsDate(date) {
-  return date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
-}
-
-/**
- * Escape text for iCalendar format
- */
-function escapeIcsText(text) {
-  if (!text) return "";
-  return text
-    .replace(/\\/g, "\\\\")
-    .replace(/;/g, "\\;")
-    .replace(/,/g, "\\,")
-    .replace(/\n/g, "\\n");
-}
-
-/**
- * Generate iCalendar (ICS) content for an event invitation
- * @param {Object} eventData - Event details
- * @param {string} method - iTIP method (REQUEST, CANCEL, etc.)
- * @returns {string} ICS content
- */
-function generateIcsInvitation(eventData, method = "REQUEST") {
-  const { id, title, start, end, location, description, organizer, attendees } = eventData;
-  
-  const lines = [
-    "BEGIN:VCALENDAR",
-    "VERSION:2.0",
-    "PRODID:-//Thunderbird REST API//EN",
-    "CALSCALE:GREGORIAN",
-    `METHOD:${method}`,
-    "BEGIN:VEVENT",
-    `UID:${id}@thunderbird-api`,
-    `DTSTAMP:${formatIcsDate(new Date())}`,
-    `DTSTART:${formatIcsDate(new Date(start))}`,
-    `DTEND:${formatIcsDate(new Date(end))}`,
-    `SUMMARY:${escapeIcsText(title)}`,
-    "SEQUENCE:0",
-    "STATUS:CONFIRMED"
-  ];
-  
-  if (location) {
-    lines.push(`LOCATION:${escapeIcsText(location)}`);
-  }
-  
-  if (description) {
-    lines.push(`DESCRIPTION:${escapeIcsText(description)}`);
-  }
-  
-  // Add organizer
-  if (organizer) {
-    const orgEmail = typeof organizer === "string" ? organizer : organizer.email;
-    const orgName = typeof organizer === "string" ? null : organizer.name;
-    if (orgName) {
-      lines.push(`ORGANIZER;CN=${escapeIcsText(orgName)}:mailto:${orgEmail}`);
-    } else {
-      lines.push(`ORGANIZER:mailto:${orgEmail}`);
-    }
-  }
-  
-  // Add attendees
-  if (attendees && Array.isArray(attendees)) {
-    for (const att of attendees) {
-      const attEmail = typeof att === "string" ? att : att.email;
-      const attName = typeof att === "string" ? null : att.name;
-      const attRole = typeof att === "string" ? "REQ-PARTICIPANT" : (att.role || "REQ-PARTICIPANT");
-      const attStatus = typeof att === "string" ? "NEEDS-ACTION" : (att.status || "NEEDS-ACTION");
-      
-      let attendeeLine = "ATTENDEE";
-      attendeeLine += `;ROLE=${attRole}`;
-      attendeeLine += `;PARTSTAT=${attStatus}`;
-      attendeeLine += ";RSVP=TRUE";
-      if (attName) {
-        attendeeLine += `;CN=${escapeIcsText(attName)}`;
-      }
-      attendeeLine += `:mailto:${attEmail}`;
-      lines.push(attendeeLine);
-    }
-  }
-  
-  lines.push("END:VEVENT");
-  lines.push("END:VCALENDAR");
-  
-  return lines.join("\r\n");
-}
-
-/**
  * Normalize parameter names - accept common aliases
  */
 function normalizeCalendarParams(params) {
@@ -192,8 +103,7 @@ function normalizeCalendarParams(params) {
     location: ["place", "where", "loc"],
     description: ["desc", "details", "notes", "body", "content"],
     organizer: ["host", "owner", "creator"],
-    attendees: ["participants", "invitees", "guests", "people"],
-    sendInvites: ["send_invites", "sendInvitations", "send_invitations", "notify"]
+    attendees: ["participants", "invitees", "guests", "people"]
   };
   
   const normalized = { ...params };
@@ -454,10 +364,7 @@ async function createEvent(params, cal, Ci, Cc) {
 
   // Normalize parameter names
   const normalized = normalizeCalendarParams(params);
-  let { calendar: calendarId, title, start, end, location, description, organizer, attendees, sendInvites } = normalized;
-  
-  // Parse sendInvites as boolean
-  sendInvites = sendInvites === true || sendInvites === "true" || sendInvites === 1 || sendInvites === "1";
+  let { calendar: calendarId, title, start, end, location, description, organizer, attendees } = normalized;
 
   // Validate required fields with helpful errors
   if (!title) {
@@ -661,35 +568,7 @@ async function createEvent(params, cal, Ci, Cc) {
           status: att.status || "NEEDS-ACTION"
         };
       });
-      
-      // If sendInvites is requested, include invitation data for the background script to send
-      if (sendInvites) {
-        if (!organizer) {
-          response.warning = "sendInvites requested but no organizer specified. Invitations not sent.";
-        } else {
-          // Generate ICS content for the invitation
-          const eventData = {
-            id: event.id,
-            title,
-            start: startDate.toISOString(),
-            end: endDate.toISOString(),
-            location,
-            description,
-            organizer,
-            attendees
-          };
-          
-          response._invitationData = {
-            icsContent: generateIcsInvitation(eventData, "REQUEST"),
-            recipients: attendees.map(att => typeof att === "string" ? att : att.email),
-            subject: `Invitation: ${title}`,
-            organizerEmail: typeof organizer === "string" ? organizer : organizer.email
-          };
-          response.invitesPending = true;
-        }
-      } else {
-        response.note = "Invitation emails are NOT automatically sent. Use sendInvites:true to send invitations.";
-      }
+      response.note = "Invitation emails are NOT automatically sent. Calendar provider may handle scheduling if configured.";
     }
 
     return response;
