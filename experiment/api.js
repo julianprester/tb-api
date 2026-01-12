@@ -12,18 +12,25 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
     this.pendingRequests = new Map();
     this.apiToken = null;
     
-    // Read API token from environment variable
+    // Read configuration from environment variables
     try {
-      const dominated = Cc["@mozilla.org/process/environment;1"]
+      const env = Cc["@mozilla.org/process/environment;1"]
         .getService(Ci.nsIEnvironment);
-      this.apiToken = dominated.get("TB_API_TOKEN") || null;
+      
+      // API token for authentication
+      this.apiToken = env.get("TB_API_TOKEN") || null;
       if (this.apiToken) {
         console.log("[tb-api] API token configured from TB_API_TOKEN environment variable");
       } else {
         console.log("[tb-api] No TB_API_TOKEN set - authentication disabled");
       }
+      
+      // Host to bind to (default: 127.0.0.1, use 0.0.0.0 for Docker)
+      this.apiHost = env.get("TB_API_HOST") || "127.0.0.1";
+      console.log(`[tb-api] API will bind to ${this.apiHost}`);
     } catch (e) {
-      console.error("[tb-api] Failed to read environment variable:", e);
+      console.error("[tb-api] Failed to read environment variables:", e);
+      this.apiHost = "127.0.0.1";
     }
   }
 
@@ -276,9 +283,12 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
             }
           });
 
-          self.server._identity._primaryHost = "127.0.0.1";
-          self.server.start(port);
-          console.log(`[tb-api] HTTP server started on port ${port}`);
+          // Use _start directly to control the bind host
+          // "localhost" or "127.0.0.1" = loopback only
+          // anything else (e.g., "0.0.0.0") = accept connections from anywhere
+          self.server._start(port, self.apiHost);
+          self.server._identity._primaryHost = self.apiHost;
+          console.log(`[tb-api] HTTP server started on ${self.apiHost}:${port}`);
         },
 
         async stop() {

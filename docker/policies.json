@@ -1,0 +1,11 @@
+{
+  "policies": {
+    "ExtensionSettings": {
+      "tb-api@julianprester.com": {
+        "installation_mode": "force_installed",
+        "install_url": "file:///usr/lib/thunderbird/distribution/extensions/tb-api@julianprester.com.xpi"
+      }
+    },
+    "DisableAppUpdate": true
+  }
+}
