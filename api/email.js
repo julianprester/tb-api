@@ -286,12 +286,7 @@ async function composeMessage(params) {
     in_reply_to: ["inReplyTo", "reply_to", "replyTo"],
     forward_of: ["forwardOf", "forward"]
   });
-  let { to, cc, bcc, subject, body, identity, send = false, in_reply_to, forward_of } = normalized;
-  
-  // Accept send as string "true"/"false" as well
-  if (typeof send === "string") {
-    send = send.toLowerCase() === "true";
-  }
+  let { to, cc, bcc, subject, body, identity, in_reply_to, forward_of } = normalized;
 
   // Validate: for new messages, 'to' is required; for replies/forwards it's optional
   if (!in_reply_to && !forward_of && !to) {
@@ -414,40 +409,23 @@ async function composeMessage(params) {
       tab = await messenger.compose.beginNew(composeDetails);
     }
 
-    if (send) {
-      const sendResult = await messenger.compose.sendMessage(tab.id, { mode: "sendNow" });
-      if (sendResult.messages && sendResult.messages.length > 0) {
-        return {
-          success: true,
-          message: mode === "reply" ? "Reply sent" : mode === "forward" ? "Forward sent" : "Message sent",
-          message_id: sendResult.messages[0].headerMessageId,
-          from: selectedIdentity
-        };
-      }
-      return { 
-        success: true, 
-        message: mode === "reply" ? "Reply sent" : mode === "forward" ? "Forward sent" : "Message sent",
-        from: selectedIdentity 
-      };
-    } else {
-      await messenger.compose.saveMessage(tab.id, { mode: "draft" });
-      await messenger.tabs.remove(tab.id);
-      return { 
-        success: true, 
-        message: mode === "reply" ? "Reply draft saved" : mode === "forward" ? "Forward draft saved" : "Draft saved",
-        from: selectedIdentity,
-        hint: 'To send immediately, add "send": true to your request'
-      };
-    }
+    // Always save as draft (sending disabled for safety)
+    await messenger.compose.saveMessage(tab.id, { mode: "draft" });
+    await messenger.tabs.remove(tab.id);
+    return { 
+      success: true, 
+      message: mode === "reply" ? "Reply draft saved" : mode === "forward" ? "Forward draft saved" : "Draft saved",
+      from: selectedIdentity,
+      note: "Message saved as draft. Open Thunderbird to review and send."
+    };
   } catch (e) {
     if (tab) {
       try { await messenger.tabs.remove(tab.id); } catch {}
     }
     return { 
-      error: `Failed to ${send ? "send" : "save draft"}: ${e.message}`,
+      error: `Failed to save draft: ${e.message}`,
       suggestions: [
         "Check that the recipient email address is valid",
-        send ? "Try saving as draft first (omit 'send' or set to false)" : null,
         in_reply_to ? "Verify the original message still exists" : null,
         forward_of ? "Verify the original message still exists" : null
       ].filter(Boolean)

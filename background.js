@@ -28,7 +28,7 @@ async function handleRequest(request) {
           email: {
             "GET /messages": "Search messages. Params: text/q, from, to, subject, mailbox/folder, after/since, before/until, limit",
             "GET /messages/:id": "Get message by Message-ID (with or without angle brackets)",
-            "POST /messages": "Compose/reply/forward. Params: to, subject, body, identity, send, in_reply_to (message_id to reply), forward_of (message_id to forward)",
+            "POST /messages": "Compose/reply/forward (saves as draft). Params: to, subject, body, identity, in_reply_to (reply), forward_of (forward)",
             "PATCH /messages": "Update flags or move. Params: ids[], flags (read/unread/starred/flagged/junk), mailbox (to move)",
             "GET /mailboxes": "List all mail folders",
             "GET /identities": "List send-from identities"
