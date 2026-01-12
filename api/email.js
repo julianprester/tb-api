@@ -363,7 +363,7 @@ async function composeMessage(params) {
         };
       }
       
-      tab = await messenger.compose.beginReply(resolved.id, "replyToSender", composeDetails);
+      tab = await messenger.compose.beginReply(resolved.id, "replyToAll", composeDetails);
       
       // If user provided body, prepend it to the reply
       if (body) {
