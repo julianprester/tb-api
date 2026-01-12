@@ -91,6 +91,13 @@ async function searchMessages(params) {
         const plainPart = parts.find(p => p.contentType === "text/plain");
         if (plainPart && plainPart.content) {
           preview = plainPart.content.substring(0, 300);
+        } else {
+          // Fall back to HTML part if no plain text available
+          const htmlPart = parts.find(p => p.contentType === "text/html");
+          if (htmlPart && htmlPart.content) {
+            const plainText = await messenger.messengerUtilities.convertToPlainText(htmlPart.content);
+            preview = plainText.substring(0, 300);
+          }
         }
       }
     } catch (e) {}
