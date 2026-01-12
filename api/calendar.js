@@ -6,6 +6,20 @@
 // =============================================================================
 
 /**
+ * Format date in local timezone as ISO-like string (YYYY-MM-DDTHH:MM:SS)
+ * Unlike toISOString() which returns UTC, this returns local time
+ */
+function formatLocalDate(date) {
+  if (!date) return null;
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return null;
+  
+  const pad = (n) => String(n).padStart(2, '0');
+  
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+/**
  * Parse date string flexibly - accepts many formats:
  * - Relative: "today", "yesterday", "tomorrow", "last week", "2 days ago"
  * - ISO 8601: "2024-01-15", "2024-01-15T10:30:00"
@@ -340,8 +354,8 @@ function itemToEvent(item, calendarId) {
     id: item.id,
     calendar: calendarId,
     title: item.title,
-    start: startMs ? new Date(startMs).toISOString() : null,
-    end: endMs ? new Date(endMs).toISOString() : null,
+    start: startMs ? formatLocalDate(new Date(startMs)) : null,
+    end: endMs ? formatLocalDate(new Date(endMs)) : null,
     location: item.getProperty("LOCATION") || null,
     description: item.getProperty("DESCRIPTION") || null,
     organizer,
@@ -640,8 +654,8 @@ async function createEvent(params, cal, Ci, Cc) {
       id: event.id,
       calendar: found.calendar.name,
       title: title,
-      start: startDate.toISOString(),
-      end: endDate.toISOString()
+      start: formatLocalDate(startDate),
+      end: formatLocalDate(endDate)
     };
 
     if (organizer) {
