@@ -17,6 +17,8 @@ services:
       - TB_API_TOKEN=${TB_API_TOKEN:-}
       # Bind API to all interfaces (required for Docker)
       - TB_API_HOST=0.0.0.0
+      # Additional hostnames for Host header validation (service name for inter-container access)
+      - TB_API_HOSTS=thunderbird
       # Keep Thunderbird running if it crashes
       - KEEP_APP_RUNNING=1
     ports:
@@ -29,6 +31,8 @@ services:
     volumes:
       # Persistent storage for Thunderbird profile and settings
       - thunderbird_config:/config
+    networks:
+      - shared
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9595/"]
@@ -39,3 +43,7 @@ services:
 
 volumes:
   thunderbird_config:
+
+networks:
+  shared:
+    external: true

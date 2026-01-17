@@ -313,6 +313,28 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
           // anything else (e.g., "0.0.0.0") = accept connections from anywhere
           self.server._start(port, self.apiHost);
           self.server._identity._primaryHost = self.apiHost;
+          
+          // Add common hostnames to server identity so Host header validation passes
+          // This is needed because httpd.js validates the Host header against known identities
+          // and rejects requests with HTTP 400 if the hostname isn't recognized
+          self.server._identity.add("http", "localhost", port);
+          
+          // Allow configuring additional hostnames via TB_API_HOSTS environment variable
+          // (comma-separated list, e.g., "thunderbird,myservice,192.168.1.100")
+          try {
+            const env = Cc["@mozilla.org/process/environment;1"]
+              .getService(Ci.nsIEnvironment);
+            const additionalHosts = env.get("TB_API_HOSTS");
+            if (additionalHosts) {
+              for (const host of additionalHosts.split(",").map(h => h.trim()).filter(Boolean)) {
+                self.server._identity.add("http", host, port);
+                console.log(`[tb-api] Added "${host}" to server identity`);
+              }
+            }
+          } catch (e) {
+            console.error("[tb-api] Failed to read TB_API_HOSTS:", e);
+          }
+          
           console.log(`[tb-api] HTTP server started on ${self.apiHost}:${port}`);
         },
 
