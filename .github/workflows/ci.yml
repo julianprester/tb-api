@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check JSON validity
+        run: |
+          echo "Checking manifest.json..."
+          python3 -m json.tool manifest.json > /dev/null
+          echo "Checking experiment/schema.json..."
+          python3 -m json.tool experiment/schema.json > /dev/null
+          echo "All JSON files are valid"
+
+      - name: Check for syntax errors in JavaScript
+        run: |
+          echo "Checking JavaScript syntax..."
+          for file in background.js api/*.js experiment/api.js; do
+            echo "  Checking $file..."
+            node --check "$file" 2>&1 || exit 1
+          done
+          echo "All JavaScript files have valid syntax"
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build XPI
+        run: ./build.sh
+
+      - name: Upload XPI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tb-api-xpi
+          path: tb-api.xpi
+          retention-days: 30
+
+  release:
+    name: Release
+    needs: [lint, build]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(python3 -c "import json; print(json.load(open('manifest.json'))['version'])")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build XPI
+        run: ./build.sh
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Release v${{ steps.version.outputs.version }}
+          files: tb-api.xpi
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
