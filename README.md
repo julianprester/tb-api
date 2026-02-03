@@ -6,12 +6,32 @@
 
 A Thunderbird extension that exposes email, calendar, and contacts via a REST API for AI agents and automation.
 
+## Features
+
+- **LLM-friendly design**: Flexible parameter aliases, fuzzy matching, and helpful error messages with suggestions
+- **Natural language dates**: Use "today", "tomorrow", "2 days ago", "next week", or ISO 8601 formats
+- **Smart defaults**: Auto-selects calendars/address books when only one writable option exists
+- **Calendar invitations**: Create events with attendees and send ICS invitation emails
+
 ## Installation
+
+### Option 1: Load Temporarily (Development)
 
 1. Download or clone this repository
 2. In Thunderbird, go to **Add-ons and Themes** (Tools menu or `Ctrl+Shift+A`)
 3. Click the gear icon and select **Debug Add-ons**
 4. Click **Load Temporary Add-on** and select the `manifest.json` file
+
+### Option 2: Install XPI Package
+
+1. Build the package: `./build.sh`
+2. In Thunderbird, go to **Add-ons and Themes**
+3. Click the gear icon and select **Install Add-on From File**
+4. Select the `tb-api.xpi` file
+
+### Option 3: Docker
+
+See the [Docker documentation](docker/README.md) for containerized deployment.
 
 The API server starts automatically on `http://localhost:9595`.
 
@@ -23,6 +43,16 @@ The API server starts automatically on `http://localhost:9595`.
 http://localhost:9595
 ```
 
+### API Info
+
+```http
+GET /
+```
+
+Returns API version, available endpoints, and usage tips.
+
+---
+
 ### Email
 
 #### List Mailboxes
@@ -31,7 +61,7 @@ http://localhost:9595
 GET /mailboxes
 ```
 
-Returns all mail folders/mailboxes.
+Returns all mail folders with unread/total counts.
 
 #### List Identities
 
@@ -39,7 +69,7 @@ Returns all mail folders/mailboxes.
 GET /identities
 ```
 
-Returns available sending identities (email accounts).
+Returns available sending identities (email accounts configured in Thunderbird).
 
 #### Search Messages
 
@@ -47,21 +77,24 @@ Returns available sending identities (email accounts).
 GET /messages
 ```
 
-| Parameter | Type   | Description                                    |
-|-----------|--------|------------------------------------------------|
-| text      | string | Search in subject, from, to                    |
-| from      | string | Filter by sender                               |
-| to        | string | Filter by recipient                            |
-| subject   | string | Filter by subject                              |
-| mailbox   | string | Filter by folder name or role (inbox, sent...) |
-| after     | string | Messages after date (ISO 8601 or "today")      |
-| before    | string | Messages before date                           |
-| limit     | number | Max results (default 50)                       |
+| Parameter | Aliases | Type | Description |
+|-----------|---------|------|-------------|
+| text | q, query, search | string | Full-text search in message content |
+| from | sender, author | string | Filter by sender |
+| to | recipient | string | Filter by recipient |
+| subject | | string | Filter by subject |
+| mailbox | folder | string | Filter by folder name or role (inbox, sent, drafts...) |
+| after | since | string | Messages after date |
+| before | until | string | Messages before date |
+| limit | | number | Max results (default 50, max 100) |
+
+**Date formats**: ISO 8601 (`2024-01-15`), or natural language (`today`, `yesterday`, `2 days ago`, `last week`)
 
 Example:
 ```bash
 curl "http://localhost:9595/messages?mailbox=inbox&limit=10"
-curl "http://localhost:9595/messages?from=alice@example.com&after=2026-01-01"
+curl "http://localhost:9595/messages?from=alice@example.com&after=2024-01-01"
+curl "http://localhost:9595/messages?q=meeting&after=yesterday"
 ```
 
 #### Get Message
@@ -70,11 +103,12 @@ curl "http://localhost:9595/messages?from=alice@example.com&after=2026-01-01"
 GET /messages/:message_id
 ```
 
-Returns full message content by Message-ID (URL-encoded).
+Returns full message content including body and attachments. The `message_id` is the Message-ID header value (URL-encoded). Angle brackets are optional.
 
 Example:
 ```bash
 curl "http://localhost:9595/messages/%3Cabc123%40example.com%3E"
+curl "http://localhost:9595/messages/abc123%40example.com"
 ```
 
 #### Compose Message
@@ -82,34 +116,78 @@ curl "http://localhost:9595/messages/%3Cabc123%40example.com%3E"
 ```http
 POST /messages
 Content-Type: application/json
+```
 
+Creates a new message, reply, or forward. **Always saves as draft** (sending disabled for safety).
+
+**New message:**
+```json
 {
   "to": "recipient@example.com",
   "subject": "Hello",
   "body": "Message content",
   "cc": "cc@example.com",
   "bcc": "bcc@example.com",
-  "identity": "identity-id",
-  "send": false
+  "identity": "sender@example.com"
 }
 ```
 
-- `send: false` (default): saves as draft
-- `send: true`: sends immediately
+**Reply to message:**
+```json
+{
+  "in_reply_to": "<original-message-id@example.com>",
+  "body": "My reply text"
+}
+```
+
+**Forward message:**
+```json
+{
+  "forward_of": "<original-message-id@example.com>",
+  "to": "forward-to@example.com",
+  "body": "FYI, see below"
+}
+```
+
+| Parameter | Aliases | Description |
+|-----------|---------|-------------|
+| to | | Recipient(s) - required for new/forward |
+| cc | | CC recipient(s) |
+| bcc | | BCC recipient(s) |
+| subject | | Subject line |
+| body | | Message body |
+| identity | | Sender identity (email or ID) |
+| in_reply_to | inReplyTo, reply_to | Message-ID to reply to |
+| forward_of | forwardOf, forward | Message-ID to forward |
 
 #### Update Messages
 
 ```http
 PATCH /messages
 Content-Type: application/json
+```
 
+Update flags or move messages.
+
+```json
 {
-  "message_ids": ["<id1@example.com>", "<id2@example.com>"],
-  "read": true,
-  "flagged": false,
-  "move_to": "folder-id"
+  "ids": ["<id1@example.com>", "<id2@example.com>"],
+  "add_flags": ["read", "flagged"],
+  "remove_flags": ["junk"],
+  "move_to": "Archive"
 }
 ```
+
+| Parameter | Aliases | Description |
+|-----------|---------|-------------|
+| ids | id, message_ids | Array of Message-IDs or internal IDs |
+| add_flags | addFlags, add, flags | Flags to add |
+| remove_flags | removeFlags, remove | Flags to remove |
+| move_to | moveTo, destination, folder, mailbox | Destination folder |
+
+**Flag aliases**: `read`/`seen`, `flagged`/`starred`/`important`, `junk`/`spam`
+
+---
 
 ### Calendar
 
@@ -119,21 +197,25 @@ Content-Type: application/json
 GET /calendars
 ```
 
+Returns all calendars with their IDs, names, and read-only status.
+
 #### List Events
 
 ```http
 GET /events
 ```
 
-| Parameter | Type   | Description                      |
-|-----------|--------|----------------------------------|
-| calendar  | string | Filter by calendar ID            |
-| start     | string | Events starting after (ISO 8601) |
-| end       | string | Events ending before (ISO 8601)  |
+| Parameter | Aliases | Type | Description |
+|-----------|---------|------|-------------|
+| calendar | calendarId, cal | string | Filter by calendar ID or name |
+| start | startDate, from, begin | string | Events starting after (default: now) |
+| end | endDate, to, until | string | Events ending before (default: +30 days) |
 
 Example:
 ```bash
-curl "http://localhost:9595/events?start=2026-01-01T00:00:00Z&end=2026-12-31T23:59:59Z"
+curl "http://localhost:9595/events"
+curl "http://localhost:9595/events?start=today&end=next+week"
+curl "http://localhost:9595/events?calendar=Work&start=2024-01-01"
 ```
 
 #### Create Event
@@ -141,34 +223,71 @@ curl "http://localhost:9595/events?start=2026-01-01T00:00:00Z&end=2026-12-31T23:
 ```http
 POST /events
 Content-Type: application/json
+```
 
+```json
 {
-  "calendar": "calendar-uuid",
+  "calendar": "Personal",
   "title": "Team Meeting",
-  "start": "2026-01-15T10:00:00Z",
-  "end": "2026-01-15T11:00:00Z",
+  "start": "2024-01-15T10:00:00",
+  "end": "2024-01-15T11:00:00",
   "location": "Room 101",
-  "description": "Weekly sync"
+  "description": "Weekly sync",
+  "organizer": {"email": "me@example.com", "name": "My Name"},
+  "attendees": [
+    {"email": "alice@example.com", "name": "Alice"},
+    "bob@example.com"
+  ],
+  "sendInvites": true
 }
 ```
+
+| Parameter | Aliases | Required | Description |
+|-----------|---------|----------|-------------|
+| title | summary, name | Yes | Event title |
+| start | startDate, from | Yes | Start date/time |
+| end | endDate, to | Yes | End date/time |
+| calendar | calendarId, cal | Auto* | Calendar ID or name |
+| location | place, where | No | Event location |
+| description | desc, details, notes | No | Event description |
+| organizer | host, owner | No | Organizer email or {email, name} |
+| attendees | participants, invitees, guests | No | Array of emails or {email, name, role, status} |
+| sendInvites | send_invites, notify | No | Send ICS invitation emails (requires organizer) |
+
+*Calendar auto-selected if only one writable calendar exists
 
 #### Update Event
 
 ```http
-PATCH /events/:id?calendar=calendar-uuid
+PATCH /events/:id?calendar=calendar-id
 Content-Type: application/json
+```
 
+The `calendar` parameter is required to identify which calendar contains the event.
+
+```json
 {
+  "calendar": "Personal",
   "title": "Updated Title",
-  "start": "2026-01-15T11:00:00Z"
+  "start": "2024-01-15T11:00:00",
+  "attendees": [
+    {"email": "alice@example.com", "name": "Alice"},
+    {"email": "charlie@example.com", "name": "Charlie"}
+  ]
 }
 ```
+
+Note: Updating `attendees` replaces all existing attendees.
 
 #### Delete Event
 
 ```http
-DELETE /events/:id?calendar=calendar-uuid
+DELETE /events/:id?calendar=calendar-id
 ```
+
+The `calendar` parameter is required.
+
+---
 
 ### Contacts
 
@@ -178,21 +297,24 @@ DELETE /events/:id?calendar=calendar-uuid
 GET /addressbooks
 ```
 
+Returns all address books with read-only status.
+
 #### Search Contacts
 
 ```http
 GET /contacts
 ```
 
-| Parameter   | Type   | Description                  |
-|-------------|--------|------------------------------|
-| q           | string | Search query (name, email)   |
-| addressbook | string | Filter by address book ID    |
-| limit       | number | Max results (default 50)     |
+| Parameter | Aliases | Type | Description |
+|-----------|---------|------|-------------|
+| q | query, search | string | Search in name and email |
+| addressbook | book | string | Filter by address book ID or name |
+| limit | | number | Max results (default 50) |
 
 Example:
 ```bash
-curl "http://localhost:9595/contacts?q=alice&limit=10"
+curl "http://localhost:9595/contacts?q=alice"
+curl "http://localhost:9595/contacts?addressbook=Personal&limit=100"
 ```
 
 #### Create Contact
@@ -200,9 +322,11 @@ curl "http://localhost:9595/contacts?q=alice&limit=10"
 ```http
 POST /contacts
 Content-Type: application/json
+```
 
+```json
 {
-  "addressbook": "addressbook-uuid",
+  "addressbook": "Personal",
   "email": "alice@example.com",
   "firstName": "Alice",
   "lastName": "Smith",
@@ -210,32 +334,37 @@ Content-Type: application/json
 }
 ```
 
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| email | Yes | Email address |
+| firstName | No | First name |
+| lastName | No | Last name |
+| displayName | No | Display name (auto-generated if omitted) |
+| addressbook | Auto* | Address book ID or name |
+
+*Address book auto-selected if only one writable book exists
+
 #### Update Contact
 
 ```http
-PATCH /contacts/:id?addressbook=addressbook-uuid
+PATCH /contacts/:id
 Content-Type: application/json
+```
 
+```json
 {
-  "firstName": "Alicia"
+  "firstName": "Alicia",
+  "lastName": "Johnson"
 }
 ```
 
 #### Delete Contact
 
 ```http
-DELETE /contacts/:id?addressbook=addressbook-uuid
+DELETE /contacts/:id
 ```
 
-### Meta
-
-#### API Info
-
-```http
-GET /
-```
-
-Returns API version and available endpoints.
+---
 
 ## Response Format
 
@@ -263,25 +392,60 @@ Returns API version and available endpoints.
 
 ```json
 {
-  "error": "message_id parameter is required"
+  "error": "Mailbox not found: \"inbx\"",
+  "suggestions": [
+    "Did you mean: inbox?",
+    "Valid roles: archives, drafts, inbox, junk, outbox, sent, templates, trash",
+    "Use GET /mailboxes to see all available folders"
+  ]
 }
 ```
 
 ### HTTP Status Codes
 
-- `200` Success
-- `400` Bad request (missing/invalid parameters)
-- `404` Resource not found
-- `405` Method not allowed
-- `500` Internal server error
+| Code | Description |
+|------|-------------|
+| 200 | Success |
+| 400 | Bad request (missing/invalid parameters) |
+| 404 | Resource not found |
+| 405 | Method not allowed |
+| 500 | Internal server error |
+
+---
+
+## Authentication
+
+By default, the API has no authentication and only binds to localhost. For production use, set the `TB_API_TOKEN` environment variable:
+
+```bash
+export TB_API_TOKEN="your-secret-token"
+```
+
+All requests must then include:
+```
+Authorization: Bearer your-secret-token
+```
+
+See [SECURITY.md](SECURITY.md) for more details.
+
+---
 
 ## Testing
 
-Run the test script to verify read endpoints:
+Run the test scripts to verify the API:
 
 ```bash
-./test-api.sh
+# Read-only endpoint tests
+./tests/test-api.sh
+
+# Write operation tests (creates/modifies data)
+./tests/test-write-api.sh
+
+# Comprehensive edge case tests
+./tests/test-comprehensive.sh
 ```
+
+---
 
 ## Development
 
@@ -290,21 +454,36 @@ Run the test script to verify read endpoints:
 ```
 tb-api/
 ├── manifest.json           # Extension manifest
-├── background.js           # Background script (starts API)
-├── httpd.sys.mjs           # HTTP server (Mozilla httpd)
-└── mcp_server/
-    ├── api.js              # Main entry, routing
-    ├── utils.sys.mjs       # Shared utilities
-    ├── email.sys.mjs       # Email operations
-    ├── calendar.sys.mjs    # Calendar operations
-    ├── contacts.sys.mjs    # Contact operations
-    └── schema.json         # Experiment API schema
+├── background.js           # HTTP request routing
+├── api/
+│   ├── utils.js            # Shared utilities (date parsing, fuzzy matching)
+│   ├── email.js            # Email operations
+│   ├── contacts.js         # Contact operations
+│   └── calendar.js         # Calendar operations
+├── experiment/
+│   ├── api.js              # HTTP server setup (privileged context)
+│   └── schema.json         # Experiment API schema
+├── lib/
+│   ├── httpd.js            # Mozilla HTTP server
+│   └── ical.js             # iCalendar library
+├── docker/                 # Docker deployment
+└── tests/                  # API test scripts
 ```
 
 ### Reloading Changes
 
 - **Background script or manifest changes**: Reload from Debug Add-ons page
-- **ES Module changes (.sys.mjs)**: Requires full Thunderbird restart (modules are cached)
+- **ES Module changes**: Requires full Thunderbird restart (modules are cached)
+
+### Building
+
+```bash
+./build.sh
+```
+
+Creates `tb-api.xpi` package for distribution.
+
+---
 
 ## Requirements
 
