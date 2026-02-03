@@ -5,6 +5,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EXT_DIR="$SCRIPT_DIR/tb-api"
 OUTPUT_FILE="$SCRIPT_DIR/tb-api.xpi"
 
 # Remove existing package if present
@@ -14,7 +15,7 @@ if [ -f "$OUTPUT_FILE" ]; then
 fi
 
 # Create the XPI (ZIP archive) with required files
-cd "$SCRIPT_DIR"
+cd "$EXT_DIR"
 zip -r "$OUTPUT_FILE" \
     manifest.json \
     background.js \

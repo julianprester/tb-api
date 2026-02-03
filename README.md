@@ -20,7 +20,7 @@ A Thunderbird extension that exposes email, calendar, and contacts via a REST AP
 1. Download or clone this repository
 2. In Thunderbird, go to **Add-ons and Themes** (Tools menu or `Ctrl+Shift+A`)
 3. Click the gear icon and select **Debug Add-ons**
-4. Click **Load Temporary Add-on** and select the `manifest.json` file
+4. Click **Load Temporary Add-on** and select the `tb-api/manifest.json` file
 
 ### Option 2: Install XPI Package
 
@@ -452,22 +452,25 @@ Run the test scripts to verify the API:
 ### Project Structure
 
 ```
-tb-api/
-├── manifest.json           # Extension manifest
-├── background.js           # HTTP request routing
-├── api/
-│   ├── utils.js            # Shared utilities (date parsing, fuzzy matching)
-│   ├── email.js            # Email operations
-│   ├── contacts.js         # Contact operations
-│   └── calendar.js         # Calendar operations
-├── experiment/
-│   ├── api.js              # HTTP server setup (privileged context)
-│   └── schema.json         # Experiment API schema
-├── lib/
-│   ├── httpd.js            # Mozilla HTTP server
-│   └── ical.js             # iCalendar library
-├── docker/                 # Docker deployment
-└── tests/                  # API test scripts
+.
+├── tb-api/                     # Extension source code
+│   ├── manifest.json           # Extension manifest
+│   ├── background.js           # HTTP request routing
+│   ├── api/
+│   │   ├── utils.js            # Shared utilities (date parsing, fuzzy matching)
+│   │   ├── email.js            # Email operations
+│   │   ├── contacts.js         # Contact operations
+│   │   └── calendar.js         # Calendar operations
+│   ├── experiment/
+│   │   ├── api.js              # HTTP server setup (privileged context)
+│   │   └── schema.json         # Experiment API schema
+│   └── lib/
+│       ├── httpd.js            # Mozilla HTTP server
+│       └── ical.js             # iCalendar library
+├── docker/                     # Docker deployment
+├── tests/                      # API test scripts
+├── build.sh                    # Build script
+└── README.md
 ```
 
 ### Reloading Changes

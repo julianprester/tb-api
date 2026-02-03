@@ -23,7 +23,7 @@ Thank you for your interest in contributing to the Thunderbird API extension! Th
    - Go to **Add-ons and Themes** (Tools menu or `Ctrl+Shift+A`)
    - Click the gear icon and select **Debug Add-ons**
    - Click **Load Temporary Add-on**
-   - Select the `manifest.json` file from the repository
+   - Select the `tb-api/manifest.json` file from the repository
 
 3. The API will start automatically at `http://localhost:9595`
 
