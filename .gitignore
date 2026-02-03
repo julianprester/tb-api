@@ -1,0 +1,20 @@
+# Build artifacts
+*.xpi
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Node (if ever used)
+node_modules/
+
+# Python
+__pycache__/
+*.pyc
