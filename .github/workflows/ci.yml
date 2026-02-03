@@ -15,16 +15,16 @@ jobs:
 
       - name: Check JSON validity
         run: |
-          echo "Checking manifest.json..."
-          python3 -m json.tool manifest.json > /dev/null
-          echo "Checking experiment/schema.json..."
-          python3 -m json.tool experiment/schema.json > /dev/null
+          echo "Checking tb-api/manifest.json..."
+          python3 -m json.tool tb-api/manifest.json > /dev/null
+          echo "Checking tb-api/experiment/schema.json..."
+          python3 -m json.tool tb-api/experiment/schema.json > /dev/null
           echo "All JSON files are valid"
 
       - name: Check for syntax errors in JavaScript
         run: |
           echo "Checking JavaScript syntax..."
-          for file in background.js api/*.js experiment/api.js; do
+          for file in tb-api/background.js tb-api/api/*.js tb-api/experiment/api.js; do
             echo "  Checking $file..."
             node --check "$file" 2>&1 || exit 1
           done
@@ -57,7 +57,7 @@ jobs:
       - name: Get version
         id: version
         run: |
-          VERSION=$(python3 -c "import json; print(json.load(open('manifest.json'))['version'])")
+          VERSION=$(python3 -c "import json; print(json.load(open('tb-api/manifest.json'))['version'])")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Build XPI
