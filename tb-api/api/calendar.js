@@ -432,7 +432,7 @@ async function listEvents(params, cal, Ci) {
       );
 
       for (const item of items) {
-        results.push(itemToEvent(item, calendar.id));
+        results.push(itemToEvent(item, calendar.name));
       }
     } catch (e) {
       // Skip calendars that fail
