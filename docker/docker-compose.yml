@@ -3,36 +3,25 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    container_name: thunderbird-api
+    container_name: thunderbird
     environment:
-      # User/Group IDs - adjust to match your host user
       - USER_ID=1000
       - GROUP_ID=1000
-      # Timezone
       - TZ=Australia/Sydney
-      # Display settings
       - DISPLAY_WIDTH=1920
       - DISPLAY_HEIGHT=1080
-      # API authentication token (required for secure API access)
       - TB_API_TOKEN=${TB_API_TOKEN:-}
-      # Bind API to all interfaces (required for Docker)
       - TB_API_HOST=0.0.0.0
-      # Additional hostnames for Host header validation (service name for inter-container access)
       - TB_API_HOSTS=thunderbird
-      # Keep Thunderbird running if it crashes
       - KEEP_APP_RUNNING=1
     ports:
-      # Web UI (noVNC)
       - "5800:5800"
-      # VNC
       - "5900:5900"
-      # tb-api REST API
       - "9595:9595"
     volumes:
-      # Persistent storage for Thunderbird profile and settings
       - thunderbird_config:/config
     networks:
-      - shared
+      - ocpa-network
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9595/"]
@@ -45,5 +34,5 @@ volumes:
   thunderbird_config:
 
 networks:
-  shared:
+  ocpa-network:
     external: true
