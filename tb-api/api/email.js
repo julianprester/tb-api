@@ -90,13 +90,13 @@ async function searchMessages(params) {
       if (parts && parts.length > 0) {
         const plainPart = parts.find(p => p.contentType === "text/plain");
         if (plainPart && plainPart.content) {
-          preview = plainPart.content.substring(0, 300);
+          preview = plainPart.content.substring(0, 500);
         } else {
           // Fall back to HTML part if no plain text available
           const htmlPart = parts.find(p => p.contentType === "text/html");
           if (htmlPart && htmlPart.content) {
             const plainText = await messenger.messengerUtilities.convertToPlainText(htmlPart.content);
-            preview = plainText.substring(0, 300);
+            preview = plainText.substring(0, 500);
           }
         }
       }
