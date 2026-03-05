@@ -107,6 +107,7 @@ async function searchMessages(params) {
       message_id: msg.headerMessageId,
       date: msg.date ? new Date(msg.date).toISOString() : null,
       from: msg.author,
+      to: msg.recipients || [],
       subject: msg.subject,
       flags: getFlags(msg),
       mailbox: msg.folder?.name || "",
