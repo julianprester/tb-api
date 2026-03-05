@@ -107,7 +107,7 @@ async function searchMessages(params) {
       message_id: msg.headerMessageId,
       date: msg.date ? new Date(msg.date).toISOString() : null,
       from: msg.author,
-      to: msg.recipients || [],
+      to: cleanAddressList(msg.recipients),
       subject: msg.subject,
       flags: getFlags(msg),
       mailbox: msg.folder?.name || "",
@@ -180,8 +180,8 @@ async function getMessage(messageId) {
     message_id: msg.headerMessageId,
     date: msg.date ? new Date(msg.date).toISOString() : null,
     from: msg.author,
-    to: msg.recipients || [],
-    cc: msg.ccList || [],
+    to: cleanAddressList(msg.recipients),
+    cc: cleanAddressList(msg.ccList),
     subject: msg.subject,
     flags: getFlags(msg),
     mailbox: msg.folder?.name || "",
@@ -617,6 +617,19 @@ async function listIdentities() {
 }
 
 // Helper functions
+
+/**
+ * Strip unnecessary quotes from email address display names
+ * e.g., '"Julian.prester" <j@example.com>' -> 'Julian.prester <j@example.com>'
+ */
+function cleanAddress(addr) {
+  return addr.replace(/^"([^"]*)"(\s*<)/, "$1$2");
+}
+
+function cleanAddressList(addrs) {
+  if (!addrs) return [];
+  return addrs.map(cleanAddress);
+}
 
 function getFlags(msg) {
   const flags = [];
