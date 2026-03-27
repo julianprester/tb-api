@@ -18,12 +18,42 @@ async function searchMessages(params) {
   const parsedLimit = parseInt(limit, 10);
   const maxResults = Math.min(Math.max(parsedLimit > 0 ? parsedLimit : 50, 1), 100);
 
+  // Resolve flag filters using the same aliases as PATCH /messages
+  // "unread"/"unseen" -> unread=true, "read"/"seen"/"opened" -> unread=false
+  // "flagged"/"starred"/"important" -> flagged=true/false
+  // "junk"/"spam" -> junk=true/false
+  function parseBool(val) {
+    if (val === true || val === "true" || val === "1") return true;
+    if (val === false || val === "false" || val === "0") return false;
+    return undefined;
+  }
+  const flagFilters = {};
+  if (normalized.unread !== undefined) {
+    const v = parseBool(normalized.unread);
+    if (v !== undefined) flagFilters.unread = v;
+  }
+  if (normalized.read !== undefined) {
+    const v = parseBool(normalized.read);
+    if (v !== undefined) flagFilters.unread = !v;
+  }
+  if (normalized.flagged !== undefined) {
+    const v = parseBool(normalized.flagged);
+    if (v !== undefined) flagFilters.flagged = v;
+  }
+  if (normalized.junk !== undefined) {
+    const v = parseBool(normalized.junk);
+    if (v !== undefined) flagFilters.junk = v;
+  }
+
   const queryInfo = {};
 
   if (text) queryInfo.fullText = text;
   if (from) queryInfo.author = from;
   if (to) queryInfo.recipients = to;
   if (subject) queryInfo.subject = subject;
+  if (flagFilters.unread !== undefined) queryInfo.unread = flagFilters.unread;
+  if (flagFilters.flagged !== undefined) queryInfo.flagged = flagFilters.flagged;
+  if (flagFilters.junk !== undefined) queryInfo.junk = flagFilters.junk;
 
   // Flexible date parsing
   if (after) {

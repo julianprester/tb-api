@@ -122,6 +122,10 @@ const PARAM_ALIASES = {
   after: ["since", "from_date", "fromDate", "start", "startDate"],
   before: ["until", "to_date", "toDate", "end", "endDate"],
   limit: ["max", "count", "size", "maxResults"],
+  unread: ["unread", "unseen"],
+  read: ["seen", "opened"],
+  flagged: ["starred", "important", "flag"],
+  junk: ["spam"],
   
   // Message compose (note: "text" removed as alias to avoid conflict with email search)
   body: ["content", "message"],
