@@ -139,7 +139,8 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
     function isCalendarRoute(path) {
       return path === "/calendars" || 
              path === "/events" || 
-             path.startsWith("/events/");
+             path.startsWith("/events/") ||
+             path === "/upcoming";
     }
 
     /**
@@ -167,6 +168,12 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
         // GET /events
         if (path === "/events" && method === "GET") {
           sendCalendarResponse(requestId, await calendar.listEvents(params, cal, Ci));
+          return;
+        }
+
+        // GET /upcoming
+        if (path === "/upcoming" && method === "GET") {
+          sendCalendarResponse(requestId, await calendar.upcomingEvents(params, cal, Ci));
           return;
         }
 

@@ -455,6 +455,74 @@ async function listEvents(params, cal, Ci) {
 }
 
 /**
+ * List upcoming events from now until end of today
+ */
+async function upcomingEvents(params, cal, Ci) {
+  if (!cal) {
+    return {
+      error: "Calendar not available",
+      suggestions: ["Ensure Thunderbird's calendar component is enabled"]
+    };
+  }
+
+  const normalized = normalizeCalendarParams(params);
+  const { calendar: calendarId } = normalized;
+
+  const now = new Date();
+  const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
+  const rangeStart = cal.createDateTime();
+  rangeStart.nativeTime = now.getTime() * 1000;
+
+  const rangeEnd = cal.createDateTime();
+  rangeEnd.nativeTime = endOfDay.getTime() * 1000;
+
+  let calendars;
+  if (calendarId) {
+    const found = findCalendar(calendarId, cal);
+    if (!found.calendar) {
+      return { error: found.error, suggestions: found.suggestions };
+    }
+    calendars = [found.calendar];
+  } else {
+    calendars = cal.manager.getCalendars();
+  }
+
+  const results = [];
+
+  for (const calendar of calendars) {
+    try {
+      const items = await calendar.getItemsAsArray(
+        Ci.calICalendar.ITEM_FILTER_TYPE_EVENT,
+        0,
+        rangeStart,
+        rangeEnd
+      );
+      for (const item of items) {
+        results.push(itemToEvent(item, calendar.name));
+      }
+    } catch (e) {
+      // Skip calendars that fail
+    }
+  }
+
+  // Sort by start date
+  results.sort((a, b) => new Date(a.start) - new Date(b.start));
+
+  const response = {
+    events: results,
+    from: formatLocalDate(now),
+    until: formatLocalDate(endOfDay)
+  };
+
+  if (results.length === 0) {
+    response.hints = ["No more events scheduled for today"];
+  }
+
+  return response;
+}
+
+/**
  * Create a new event
  * Accepts flexible date formats and auto-selects calendar if only one writable exists
  */
