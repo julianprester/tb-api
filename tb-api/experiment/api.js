@@ -277,6 +277,10 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
             }
 
             // Read body for POST/PATCH
+            // nsIScriptableInputStream.read() is used because it respects available()
+            // and won't block waiting for EOF (unlike nsIConverterInputStream in a loop).
+            // The raw bytes are then decoded from UTF-8 via escape/decodeURIComponent so
+            // multi-byte characters (em dashes, smart quotes, emoji, etc.) are preserved.
             let body = "";
             if ((request.method === "POST" || request.method === "PATCH") && request.bodyInputStream) {
               const sis = Cc["@mozilla.org/scriptableinputstream;1"]
@@ -284,7 +288,16 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
               sis.init(request.bodyInputStream);
               const available = sis.available();
               if (available > 0) {
-                body = sis.read(available);
+                const rawBytes = sis.read(available);
+                // rawBytes is a Latin-1 string (one char per byte). Re-interpret as UTF-8:
+                // escape() percent-encodes each byte > 0x7F as %XX, then
+                // decodeURIComponent() interprets the %XX sequences as UTF-8 code units.
+                try {
+                  body = decodeURIComponent(escape(rawBytes));
+                } catch (e) {
+                  // Fall back to raw bytes if the body isn't valid UTF-8
+                  body = rawBytes;
+                }
               }
             }
 
