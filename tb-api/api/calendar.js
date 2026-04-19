@@ -350,7 +350,19 @@ function itemToEvent(item, calendarId) {
     // Ignore errors getting attendees
   }
 
-  return {
+  // For recurring event occurrences, include recurrence metadata
+  let recurrenceId = null;
+  let parentId = null;
+  if (item.recurrenceId) {
+    const recMs = item.recurrenceId.nativeTime ? item.recurrenceId.nativeTime / 1000 : null;
+    recurrenceId = recMs ? formatLocalDate(new Date(recMs)) : null;
+    // parentItem is the master event of the series
+    if (item.parentItem && item.parentItem.id !== item.id) {
+      parentId = item.parentItem.id;
+    }
+  }
+
+  const event = {
     id: item.id,
     calendar: calendarId,
     title: item.title,
@@ -361,6 +373,13 @@ function itemToEvent(item, calendarId) {
     organizer,
     attendees
   };
+
+  if (recurrenceId !== null) {
+    event.recurrenceId = recurrenceId;
+    event.parentId = parentId || item.id;
+  }
+
+  return event;
 }
 
 /**
@@ -425,7 +444,7 @@ async function listEvents(params, cal, Ci) {
   for (const calendar of calendars) {
     try {
       const items = await calendar.getItemsAsArray(
-        Ci.calICalendar.ITEM_FILTER_TYPE_EVENT,
+        Ci.calICalendar.ITEM_FILTER_TYPE_EVENT | Ci.calICalendar.ITEM_FILTER_CLASS_OCCURRENCES,
         0,
         rangeStart,
         rangeEnd
@@ -493,7 +512,7 @@ async function upcomingEvents(params, cal, Ci) {
   for (const calendar of calendars) {
     try {
       const items = await calendar.getItemsAsArray(
-        Ci.calICalendar.ITEM_FILTER_TYPE_EVENT,
+        Ci.calICalendar.ITEM_FILTER_TYPE_EVENT | Ci.calICalendar.ITEM_FILTER_CLASS_OCCURRENCES,
         0,
         rangeStart,
         rangeEnd
