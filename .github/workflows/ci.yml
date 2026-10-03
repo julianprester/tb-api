@@ -24,11 +24,14 @@ jobs:
       - name: Check for syntax errors in JavaScript
         run: |
           echo "Checking JavaScript syntax..."
-          for file in tb-api/background.js tb-api/api/*.js tb-api/experiment/api.js; do
+          for file in tb-api/background.js tb-api/api/*.js tb-api/experiment/*.js; do
             echo "  Checking $file..."
             node --check "$file" 2>&1 || exit 1
           done
           echo "All JavaScript files have valid syntax"
+
+      - name: Test folder refresh (mocked Thunderbird APIs)
+        run: node --test tests/test-refresh-folder.js
 
   build:
     name: Build

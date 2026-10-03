@@ -12,6 +12,7 @@ A Thunderbird extension that exposes email, calendar, and contacts via a REST AP
 - **Natural language dates**: Use "today", "tomorrow", "2 days ago", "next week", or ISO 8601 formats
 - **Smart defaults**: Auto-selects calendars/address books when only one writable option exists
 - **Calendar invitations**: Create events with attendees and send ICS invitation emails
+- **Opt-in folder refresh**: Synchronize an IMAP folder before searching its local messages
 
 ## Installation
 
@@ -63,6 +64,61 @@ GET /mailboxes
 
 Returns all mail folders with unread/total counts.
 
+#### Refresh Folder
+
+```http
+POST /mailboxes/refresh
+Content-Type: application/json
+```
+
+Refresh a concrete IMAP folder and wait for Thunderbird's folder update to complete.
+Accepts a folder ID, name, or role using the same resolver as message search. Prefer
+an exact ID from `GET /mailboxes` when multiple accounts have similarly named folders.
+
+```json
+{
+  "mailbox": "sent",
+  "timeoutMs": 30000
+}
+```
+
+| Parameter | Aliases | Type | Description |
+|-----------|---------|------|-------------|
+| mailbox | folder, mailboxId, folderId, box | string | Folder ID, name, or role (required) |
+| timeoutMs | timeout_ms, timeout | integer | Per-caller deadline in milliseconds (default 30000, range 1–60000) |
+
+Parameters can also be supplied in the query string:
+
+```bash
+curl --max-time 65 -X POST "http://localhost:9595/mailboxes/refresh?mailbox=sent"
+```
+
+Successful refresh:
+
+```json
+{"folder_id":"account1://Sent","mailbox":"Sent","refreshed":true,"elapsed_ms":120}
+```
+
+Local folders have no remote server to synchronize and return an explicit no-op:
+
+```json
+{"folder_id":"account1://Local","mailbox":"Local","refreshed":false,"skipped":true,"reason":"local_folder"}
+```
+
+Account roots, virtual/unified folders, non-selectable IMAP folders, and other remote
+protocols are not supported. Refresh does not recurse into subfolders or refresh an
+entire account. Thunderbird must be online for IMAP refresh. Versions without
+Thunderbird's native folder-ID resolver return `503` with `code: "refresh_unavailable"`.
+
+Concurrent requests for the same native folder share one update, with independent
+caller deadlines. A timeout returns `504`; it does not cancel Thunderbird's network
+operation. Until that operation completes, retries share it rather than start another
+update. Stopping the API or unloading the extension clears its waiting state.
+
+Refresh synchronizes folder state and message headers, not necessarily offline copies
+of message bodies. Normal Thunderbird update behavior, including configured incoming
+mail filters, can run.
+
 #### List Identities
 
 ```http
@@ -83,10 +139,12 @@ GET /messages
 | from | sender, author | string | Filter by sender |
 | to | recipient | string | Filter by recipient |
 | subject | | string | Filter by subject |
-| mailbox | folder | string | Filter by folder name or role (inbox, sent, drafts...) |
+| mailbox | folder, mailboxId, folderId, box | string | Filter by folder ID, name, or role (inbox, sent, drafts...) |
 | after | since | string | Messages after date |
 | before | until | string | Messages before date |
 | limit | | number | Max results (default 50, max 100) |
+| refresh | | boolean | Refresh the selected folder before searching (default false; requires mailbox) |
+| timeoutMs | timeout_ms, timeout | integer | Refresh deadline in milliseconds (default 30000, range 1–60000) |
 
 **Date formats**: ISO 8601 (`2024-01-15`), or natural language (`today`, `yesterday`, `2 days ago`, `last week`)
 
@@ -95,7 +153,16 @@ Example:
 curl "http://localhost:9595/messages?mailbox=inbox&limit=10"
 curl "http://localhost:9595/messages?from=alice@example.com&after=2024-01-01"
 curl "http://localhost:9595/messages?q=meeting&after=yesterday"
+curl --max-time 65 "http://localhost:9595/messages?mailbox=sent&refresh=true&after=yesterday"
 ```
+
+Searches normally use Thunderbird's local database. With `refresh=true`, the exact
+resolved folder is refreshed before the query starts. The response includes a
+`refresh` object (also when no messages match). A requested refresh failure returns
+an error instead of silently returning potentially stale results. `refresh=false`
+or `refresh=0` never triggers synchronization; true/false and 1/0 are accepted.
+Unscoped searches with `refresh=true` are rejected, since no single folder has been
+selected to refresh. `timeoutMs` is only used when refresh is enabled.
 
 #### Get Message
 
@@ -410,6 +477,12 @@ DELETE /contacts/:id
 | 404 | Resource not found |
 | 405 | Method not allowed |
 | 500 | Internal server error |
+| 502 | Thunderbird's folder update failed |
+| 503 | Thunderbird offline or refresh unavailable/stopped |
+| 504 | Folder refresh exceeded the caller's deadline |
+
+Refresh errors include a machine-readable `code`, such as `refresh_timeout`,
+`thunderbird_offline`, or `unsupported_folder`.
 
 ---
 
@@ -432,7 +505,16 @@ See [SECURITY.md](SECURITY.md) for more details.
 
 ## Testing
 
-Run the test scripts to verify the API:
+Run the mocked refresh tests without Thunderbird or network access:
+
+```bash
+node --test tests/test-refresh-folder.js
+```
+
+These cover native listener completion, errors/timeouts, concurrent callers,
+folder targeting, search ordering, HTTP routing, and authentication. CI runs them.
+
+The shell integration scripts require a running, configured Thunderbird API:
 
 ```bash
 # Read-only endpoint tests
@@ -444,6 +526,12 @@ Run the test scripts to verify the API:
 # Comprehensive edge case tests
 ./tests/test-comprehensive.sh
 ```
+
+To verify real IMAP synchronization, use a disposable test folder: deliver a new
+message using another client, call `POST /mailboxes/refresh` for its exact folder ID,
+and confirm a subsequent `GET /messages?mailbox=...` returns that Message-ID. Also
+verify the one-shot `refresh=true` search. Mocked tests do not establish real server
+synchronization or body download behavior.
 
 ---
 
@@ -463,6 +551,7 @@ Run the test scripts to verify the API:
 │   │   └── calendar.js         # Calendar operations
 │   ├── experiment/
 │   │   ├── api.js              # HTTP server setup (privileged context)
+│   │   ├── folders.js          # Native folder refresh and concurrent caller lifecycle
 │   │   └── schema.json         # Experiment API schema
 │   └── lib/
 │       ├── httpd.js            # Mozilla HTTP server

@@ -21,6 +21,27 @@
         "parameters": []
       },
       {
+        "name": "refreshFolder",
+        "type": "function",
+        "async": true,
+        "description": "Refresh a concrete IMAP folder and wait for completion. Local folders return an explicit no-op result.",
+        "parameters": [
+          {
+            "name": "folderId",
+            "type": "string",
+            "description": "The resolved Thunderbird MailFolder ID"
+          },
+          {
+            "name": "timeoutMs",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 60000,
+            "optional": true,
+            "description": "Per-caller timeout in milliseconds (default 30000)"
+          }
+        ]
+      },
+      {
         "name": "sendResponse",
         "type": "function",
         "async": false,

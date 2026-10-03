@@ -1,4 +1,4 @@
-/* global ExtensionCommon, Cc, Ci, Cu, Services, ChromeUtils */
+/* global ExtensionCommon, Cc, Ci, Cu, Services, ChromeUtils, Components */
 "use strict";
 
 var { ExtensionCommon } = ChromeUtils.importESModule(
@@ -10,6 +10,7 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
     super(extension);
     this.server = null;
     this.pendingRequests = new Map();
+    this.folderRefresher = null;
     this.apiToken = null;
     
     // Read configuration from environment variables
@@ -37,6 +38,16 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
   getAPI(context) {
     // Store reference to this for use in API methods
     const self = this;
+    context.callOnClose(self);
+
+    if (!self.folderRefresher) {
+      const folderScope = { Services, Ci, Components, ChromeUtils, console };
+      Services.scriptloader.loadSubScript(
+        context.extension.rootURI.resolve("experiment/folders.js"),
+        folderScope
+      );
+      self.folderRefresher = new folderScope.FolderRefresher();
+    }
 
     // Load HttpServer via loadSubScript (httpd.js is not an ES module)
     const httpdScope = {};
@@ -358,7 +369,12 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
           console.log(`[tb-api] HTTP server started on ${self.apiHost}:${port}`);
         },
 
+        refreshFolder(folderId, timeoutMs) {
+          return self.folderRefresher.refreshFolder(folderId, timeoutMs);
+        },
+
         async stop() {
+          self.folderRefresher.cancelAll();
           if (self.server) {
             await new Promise(resolve => self.server.stop(resolve));
             self.server = null;
@@ -399,6 +415,7 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
   }
 
   close() {
+    if (this.folderRefresher) this.folderRefresher.close();
     // Stop the HTTP server when extension is unloaded
     if (this.server) {
       console.log("[tb-api] Shutting down HTTP server...");

@@ -122,6 +122,7 @@ const PARAM_ALIASES = {
   after: ["since", "from_date", "fromDate", "start", "startDate"],
   before: ["until", "to_date", "toDate", "end", "endDate"],
   limit: ["max", "count", "size", "maxResults"],
+  timeoutMs: ["timeout_ms", "timeout"],
   unread: ["unread", "unseen"],
   read: ["seen", "opened"],
   flagged: ["starred", "important", "flag"],
@@ -206,11 +207,12 @@ function jsonResponse(data, statusCode = 200) {
 /**
  * Format error response with helpful suggestions
  */
-function errorResponse(message, statusCode = 400, suggestions = null) {
+function errorResponse(message, statusCode = 400, suggestions = null, code = null) {
   const response = { error: message };
   if (suggestions) {
     response.suggestions = suggestions;
   }
+  if (code) response.code = code;
   return {
     statusCode,
     body: JSON.stringify(response)
@@ -222,7 +224,7 @@ function errorResponse(message, statusCode = 400, suggestions = null) {
  */
 function resultResponse(result, errorStatusCode = 400) {
   if (result.error) {
-    return errorResponse(result.error, errorStatusCode, result.suggestions);
+    return errorResponse(result.error, result.statusCode || errorStatusCode, result.suggestions, result.code);
   }
   return jsonResponse(result);
 }

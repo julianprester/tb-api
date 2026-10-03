@@ -8,6 +8,58 @@
 // Cache for mailbox list (for suggestions)
 let mailboxCache = null;
 
+function parseRefreshTimeout(value = 30000) {
+  const timeoutMs = typeof value === "string" && /^\d+$/.test(value.trim())
+    ? Number(value.trim()) : value;
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60000) {
+    return {
+      error: "timeoutMs must be an integer between 1 and 60000",
+      code: "invalid_timeout",
+      suggestions: ["Use timeoutMs=30000 (milliseconds); the maximum is 60000"]
+    };
+  }
+  return { timeoutMs };
+}
+
+/**
+ * Reusable refresh primitive. The caller must resolve the search target once
+ * and pass its exact folder ID, rather than resolving the mailbox again here.
+ */
+async function refresh_folder(folderId, { timeoutMs } = {}) {
+  if (typeof folderId !== "string" || !folderId.trim()) {
+    return { error: "A folder ID is required", code: "invalid_folder" };
+  }
+  const timeout = parseRefreshTimeout(timeoutMs);
+  if (timeout.error) return timeout;
+
+  try {
+    return await browser.httpServer.refreshFolder(folderId, timeout.timeoutMs);
+  } catch (e) {
+    return {
+      error: `Could not refresh folder: ${e.message}`,
+      code: "refresh_failed",
+      statusCode: 500
+    };
+  }
+}
+
+/**
+ * Explicit refresh endpoint, accepting the same mailbox aliases as search.
+ */
+async function refreshMailbox(params) {
+  const normalized = Utils.normalizeParams(params, Utils.PARAM_ALIASES);
+  if (!normalized.mailbox) {
+    return {
+      error: "mailbox is required for folder refresh",
+      code: "missing_mailbox",
+      suggestions: ["Specify a folder ID, name, or role, e.g. mailbox=sent", "Use GET /mailboxes to find folder IDs"]
+    };
+  }
+  const resolved = await resolveMailboxWithSuggestions(normalized.mailbox);
+  if (resolved.error) return resolved;
+  return refresh_folder(resolved.id, { timeoutMs: normalized.timeoutMs });
+}
+
 /**
  * Search messages with flexible parameter handling
  */
@@ -23,9 +75,20 @@ async function searchMessages(params) {
   // "flagged"/"starred"/"important" -> flagged=true/false
   // "junk"/"spam" -> junk=true/false
   function parseBool(val) {
-    if (val === true || val === "true" || val === "1") return true;
-    if (val === false || val === "false" || val === "0") return false;
+    if (val === true || val === 1 || val === "true" || val === "1") return true;
+    if (val === false || val === 0 || val === "false" || val === "0") return false;
     return undefined;
+  }
+  const refreshRequested = normalized.refresh === undefined ? false : parseBool(normalized.refresh);
+  if (refreshRequested === undefined) {
+    return { error: "refresh must be true, false, 1, or 0", code: "invalid_refresh" };
+  }
+  if (refreshRequested && !mailbox) {
+    return {
+      error: "mailbox is required when refresh=true",
+      code: "missing_mailbox",
+      suggestions: ["Specify the folder to refresh and search, e.g. mailbox=inbox&refresh=true"]
+    };
   }
   const flagFilters = {};
   if (normalized.unread !== undefined) {
@@ -90,6 +153,14 @@ async function searchMessages(params) {
     queryInfo.folderId = resolved.id;
   }
 
+  // Refresh the very same folder that the query will search, and never silently
+  // fall back to potentially stale results when a requested refresh fails.
+  let refreshResult;
+  if (refreshRequested) {
+    refreshResult = await refresh_folder(queryInfo.folderId, { timeoutMs: normalized.timeoutMs });
+    if (refreshResult.error) return refreshResult;
+  }
+
   const result = await messenger.messages.query(queryInfo);
   let messages = result.messages || [];
 
@@ -105,7 +176,8 @@ async function searchMessages(params) {
       messages: [],
       total: 0,
       has_more: false,
-      hints: hints.length > 0 ? hints : ["No messages match your search criteria"]
+      hints: hints.length > 0 ? hints : ["No messages match your search criteria"],
+      ...(refreshResult ? { refresh: refreshResult } : {})
     };
   }
 
@@ -149,7 +221,8 @@ async function searchMessages(params) {
   return {
     messages: formatted,
     total: formatted.length,
-    has_more: hasMore
+    has_more: hasMore,
+    ...(refreshResult ? { refresh: refreshResult } : {})
   };
 }
 
@@ -675,6 +748,16 @@ function getFlags(msg) {
  * Resolve mailbox with helpful suggestions on failure
  */
 async function resolveMailboxWithSuggestions(mailbox) {
+  if (typeof mailbox !== "string" || !mailbox.trim()) {
+    return { error: "mailbox must be a non-empty folder ID, name, or role", code: "invalid_mailbox" };
+  }
+
+  // Exact IDs take precedence over role/name guesses, especially across accounts.
+  try {
+    const folder = await messenger.folders.get(mailbox);
+    if (folder) return { id: folder.id, name: folder.name };
+  } catch (e) {}
+
   const normalized = mailbox.toLowerCase().trim();
   const validRoles = ["archives", "drafts", "inbox", "junk", "outbox", "sent", "templates", "trash"];
 
@@ -706,16 +789,12 @@ async function resolveMailboxWithSuggestions(mailbox) {
     if (fuzzyFolder) return { id: fuzzyFolder.id, name: fuzzyFolder.name };
   }
 
-  // Try as ID
-  try {
-    const folder = await messenger.folders.get(mailbox);
-    if (folder) return { id: mailbox, name: folder.name };
-  } catch (e) {}
-
   // Not found - provide helpful suggestions
   const suggestion = Utils.didYouMean(mailbox, [...validRoles, ...folderNames]);
   return {
     error: `Mailbox not found: "${mailbox}"`,
+    code: "folder_not_found",
+    statusCode: 404,
     suggestions: [
       suggestion,
       `Valid roles: ${validRoles.join(", ")}`,
@@ -726,6 +805,8 @@ async function resolveMailboxWithSuggestions(mailbox) {
 
 // Export
 var Email = {
+  refresh_folder,
+  refreshMailbox,
   searchMessages,
   getMessage,
   composeMessage,

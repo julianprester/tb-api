@@ -7,16 +7,16 @@ const PORT = 9595;
  */
 async function handleRequest(request) {
   const { method, path, queryString, body } = request;
-  const params = { ...Utils.parseQueryString(queryString), ...(body ? JSON.parse(body) : {}) };
 
   console.log(`[tb-api] ${method} ${path}`);
 
   try {
+    const params = { ...Utils.parseQueryString(queryString), ...(body ? JSON.parse(body) : {}) };
     // Root endpoint - LLM-friendly API description
     if (path === "/" && method === "GET") {
       return Utils.jsonResponse({
         name: "Thunderbird REST API",
-        version: "2.0",
+        version: browser.runtime.getManifest().version,
         description: "REST API for Thunderbird email, calendar, and contacts. Designed for AI/LLM consumption with flexible inputs and helpful error messages.",
         tips: [
           "Dates accept: ISO 8601, 'today', 'tomorrow', 'yesterday', '2 days ago', 'next week'",
@@ -26,11 +26,12 @@ async function handleRequest(request) {
         ],
         endpoints: {
           email: {
-            "GET /messages": "Search messages. Params: text/q, from, to, subject, mailbox/folder, after/since, before/until, limit",
+            "GET /messages": "Search messages. Params: text/q, from, to, subject, mailbox/folder, after/since, before/until, limit, refresh (default false; requires mailbox), timeoutMs (default 30000, max 60000)",
             "GET /messages/:id": "Get message by Message-ID (with or without angle brackets)",
             "POST /messages": "Compose/reply/forward (saves as draft). Params: to, subject, body, identity, in_reply_to (reply), forward_of (forward)",
             "PATCH /messages": "Update flags or move. Params: ids[], flags (read/unread/starred/flagged/junk), mailbox (to move)",
             "GET /mailboxes": "List all mail folders",
+            "POST /mailboxes/refresh": "Refresh a concrete folder before reading it. Params: mailbox/folder (ID, name, or role; required), timeoutMs (default 30000, max 60000)",
             "GET /identities": "List send-from identities"
           },
           calendar: {
@@ -73,6 +74,11 @@ async function handleRequest(request) {
       return Utils.jsonResponse(await Email.listMailboxes());
     }
 
+    if (path === "/mailboxes/refresh") {
+      if (method !== "POST") return Utils.errorResponse("Method not allowed", 405);
+      return Utils.resultResponse(await Email.refreshMailbox(params));
+    }
+
     if (path === "/identities" && method === "GET") {
       return Utils.jsonResponse(await Email.listIdentities());
     }
@@ -107,7 +113,8 @@ async function handleRequest(request) {
 
   } catch (e) {
     console.error("[tb-api] Error:", e);
-    return Utils.errorResponse(e.message, 500);
+    const statusCode = e instanceof SyntaxError || e instanceof URIError ? 400 : 500;
+    return Utils.errorResponse(e.message, statusCode);
   }
 }
 

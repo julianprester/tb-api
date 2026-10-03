@@ -13,6 +13,12 @@ Use when processing, searching, or drafting emails via the Thunderbird REST API.
 # Search inbox
 curl -s "http://localhost:9595/messages?mailbox=inbox&limit=50"
 
+# Refresh the selected IMAP folder before searching (opt-in)
+curl -s --max-time 65 "http://localhost:9595/messages?mailbox=sent&refresh=true&after=yesterday"
+
+# Or refresh explicitly before a later read
+curl -s --max-time 65 -X POST "http://localhost:9595/mailboxes/refresh?mailbox=sent"
+
 # Search with filters (ALWAYS use date filters on large mailboxes)
 curl -s "http://localhost:9595/messages?mailbox=archive&subject=query&after=2024-01-01&limit=50"
 curl -s "http://localhost:9595/messages?from=sender@example.com&after=7+days+ago"
@@ -48,6 +54,7 @@ curl -s "http://localhost:9595/identities"
 - **Date filters required for large mailboxes** - Without `after`/`before`, searches on archive/sent often timeout. Formats: `2024-01-15`, `today`, `yesterday`, `7 days ago`
 - **Use Message-ID strings for PATCH** - Use the RFC 5322 Message-ID (e.g., `<abc123@example.com>`), not internal numeric IDs
 - **Drafts only** - `POST /messages` always saves as draft for safety; messages must be sent manually from Thunderbird
+- **Opt-in freshness** - Use `refresh=true` with a specific mailbox to sync IMAP headers before searching. Refresh failures return errors, not stale results. Local folders return an explicit no-op; root/virtual folders and other protocols are unsupported. `timeoutMs` defaults to 30000 (max 60000); this does not guarantee offline body downloads.
 - **Flexible parameters** - Most parameters accept aliases (e.g., `q`/`query`/`search`, `mailbox`/`folder`)
 - **Fuzzy matching** - Calendar and address book names are fuzzy matched; errors include suggestions
 
@@ -60,6 +67,7 @@ curl -s "http://localhost:9595/identities"
 | POST | /messages | Compose/reply/forward (draft) |
 | PATCH | /messages | Update flags or move |
 | GET | /mailboxes | List mail folders |
+| POST | /mailboxes/refresh | Refresh a concrete folder (mailbox required) |
 | GET | /identities | List sender identities |
 | GET | /calendars | List calendars |
 | GET | /events | List events |
