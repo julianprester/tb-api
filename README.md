@@ -143,6 +143,8 @@ GET /messages
 | after | since | string | Messages after date |
 | before | until | string | Messages before date |
 | limit | | number | Max results (default 50, max 100) |
+| read | seen, opened | boolean | Filter by read status (`true` = read, `false` = unread) |
+| unread | unseen | boolean | Filter by unread status (`true` = unread, `false` = read) |
 | refresh | | boolean | Refresh the selected folder before searching (default false; requires mailbox) |
 | timeoutMs | timeout_ms, timeout | integer | Refresh deadline in milliseconds (default 30000, range 1–60000) |
 
@@ -163,6 +165,19 @@ an error instead of silently returning potentially stale results. `refresh=false
 or `refresh=0` never triggers synchronization; true/false and 1/0 are accepted.
 Unscoped searches with `refresh=true` are rejected, since no single folder has been
 selected to refresh. `timeoutMs` is only used when refresh is enabled.
+
+**Read status:** Every returned message includes a boolean `read`: `true` means
+read, `false` means unread. This is also included in single-message responses.
+The existing `flags` array still contains `"read"` only for read messages. Reading
+through the API does not itself mark messages read; use `PATCH /messages` with
+`add_flags: ["read"]` or `remove_flags: ["read"]` to change that state.
+
+Older builds omitted `read`; their missing field could appear as `null`/`None` to
+clients even though `flags` and read/unread filters worked. Reload the updated
+extension to get the explicit field. Do not convert a valid `false` into null
+(e.g. `jq '.read // null'` or Python `message.get("read") or None`); access `read`
+directly instead. Read status reflects Thunderbird's local state; use a scoped
+`refresh=true` search when current IMAP state is needed.
 
 #### Get Message
 

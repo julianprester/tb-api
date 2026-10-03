@@ -30,8 +30,8 @@ jobs:
           done
           echo "All JavaScript files have valid syntax"
 
-      - name: Test folder refresh (mocked Thunderbird APIs)
-        run: node --test tests/test-refresh-folder.js
+      - name: Test API behavior (mocked Thunderbird APIs)
+        run: node --test tests/test-*.js
 
   build:
     name: Build
