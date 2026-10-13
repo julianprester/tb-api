@@ -299,6 +299,7 @@ test("POST refresh supports JSON, aliases, body precedence, and Unicode folder I
   const h = experimentHarness({ t, folders: [{ id, accountId: "account2", autoComplete: 0 }] });
   const result = await h.request("POST", "/mailboxes/refresh", {
     queryString: "mailbox=wrong",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ mailbox: id, timeout: "123" })
   });
   assert.equal(result.status, 200);
@@ -327,20 +328,21 @@ test("HTTP search returns 504 on timeout and does not query stale data", async t
 
 test("HTTP refresh errors have correct statuses and machine-readable codes", async t => {
   const h = experimentHarness({ t, offline: true });
-  const offline = await h.request("POST", "/mailboxes/refresh", { body: '{"mailbox":"inbox"}' });
+  const json = { "Content-Type": "application/json" };
+  const offline = await h.request("POST", "/mailboxes/refresh", { headers: json, body: '{"mailbox":"inbox"}' });
   assert.equal(offline.status, 503);
   assert.equal(offline.body.code, "thunderbird_offline");
-  const missing = await h.request("POST", "/mailboxes/refresh", { body: '{"mailbox":"no-such-folder"}' });
+  const missing = await h.request("POST", "/mailboxes/refresh", { headers: json, body: '{"mailbox":"no-such-folder"}' });
   assert.equal(missing.status, 404);
   assert.equal(missing.body.code, "folder_not_found");
-  const scope = await h.request("POST", "/mailboxes/refresh", { body: "{}" });
+  const scope = await h.request("POST", "/mailboxes/refresh", { headers: json, body: "{}" });
   assert.equal(scope.status, 400);
   assert.equal(scope.body.code, "missing_mailbox");
-  const invalid = await h.request("POST", "/mailboxes/refresh", { body: '{"mailbox":123}' });
+  const invalid = await h.request("POST", "/mailboxes/refresh", { headers: json, body: '{"mailbox":123}' });
   assert.equal(invalid.status, 400);
   const method = await h.request("GET", "/mailboxes/refresh");
   assert.equal(method.status, 405);
-  const malformed = await h.request("POST", "/mailboxes/refresh", { body: "{invalid}" });
+  const malformed = await h.request("POST", "/mailboxes/refresh", { headers: json, body: "{invalid}" });
   assert.equal(malformed.status, 400);
   assert.equal(h.count("native-update"), 0);
 });
@@ -351,7 +353,7 @@ test("existing Bearer authentication protects the refresh endpoint", async t => 
   assert.equal(unauthorized.status, 401);
   assert.equal(h.count("native-resolve"), 0);
   const authorized = await h.request("POST", "/mailboxes/refresh", {
-    token: "synthetic-token", body: '{"folder":"id"}'
+    token: "synthetic-token", headers: { "Content-Type": "application/json" }, body: '{"folder":"id"}'
   });
   assert.equal(authorized.status, 200);
   assert.equal(authorized.body.refreshed, true);

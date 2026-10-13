@@ -12,6 +12,8 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
     this.pendingRequests = new Map();
     this.folderRefresher = null;
     this.apiToken = null;
+    this.apiHost = "127.0.0.1";
+    this.allowedOrigins = [];
     
     // Read configuration from environment variables
     try {
@@ -26,12 +28,22 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
         console.log("[tb-api] No TB_API_TOKEN set - authentication disabled");
       }
       
+      // Browser origins allowed to call the API (comma-separated, default: none)
+      this.allowedOrigins = (env.get("TB_API_ALLOWED_ORIGINS") || "")
+        .split(",")
+        .map(origin => origin.trim())
+        .filter(Boolean);
+      if (this.allowedOrigins.length > 0) {
+        console.log(`[tb-api] Allowed browser origins: ${this.allowedOrigins.join(", ")}`);
+      }
+      
       // Host to bind to (default: 127.0.0.1, use 0.0.0.0 for Docker)
       this.apiHost = env.get("TB_API_HOST") || "127.0.0.1";
       console.log(`[tb-api] API will bind to ${this.apiHost}`);
     } catch (e) {
       console.error("[tb-api] Failed to read environment variables:", e);
       this.apiHost = "127.0.0.1";
+      this.allowedOrigins = [];
     }
   }
 
@@ -92,7 +104,6 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
 
       response.setStatusLine(httpVersion, statusCode, "OK");
       response.setHeader("Content-Type", "application/json; charset=utf-8", false);
-      response.setHeader("Access-Control-Allow-Origin", "*", false);
 
       const cos = Cc["@mozilla.org/intl/converter-output-stream;1"]
         .createInstance(Ci.nsIConverterOutputStream);
@@ -102,6 +113,57 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
 
       response.finish();
       return true;
+    }
+
+    /**
+     * Read a request header, returning "" when the header is absent
+     */
+    function header(request, name) {
+      return request.hasHeader(name) ? request.getHeader(name) : "";
+    }
+
+    /**
+     * Reason a request must be rejected as browser-originated, or null when it
+     * is a plain non-browser request (curl, server-side clients).
+     */
+    function rejectReason(request) {
+      const origin = header(request, "Origin");
+      if (origin && !self.allowedOrigins.includes(origin)) return "origin_not_allowed";
+      const site = header(request, "Sec-Fetch-Site").toLowerCase();
+      if ((site === "cross-site" || site === "same-site") && !origin) return "cross_site_request";
+      return null;
+    }
+
+    /**
+     * Constant-time string comparison (length is not secret), used for tokens
+     */
+    function secretsEqual(a, b) {
+      if (a.length !== b.length) return false;
+      let difference = 0;
+      for (let i = 0; i < a.length; i++) {
+        difference |= a.charCodeAt(i) ^ b.charCodeAt(i);
+      }
+      return difference === 0;
+    }
+
+    /**
+     * Write an error response directly and finish it (no pending request needed)
+     */
+    function writeError(response, httpVersion, status, body, extraHeaders = {}) {
+      const reason = { 401: "Unauthorized", 403: "Forbidden", 415: "Unsupported Media Type" }[status] || "Error";
+      response.setStatusLine(httpVersion, status, reason);
+      response.setHeader("Content-Type", "application/json; charset=utf-8", false);
+      for (const [name, value] of Object.entries(extraHeaders)) {
+        response.setHeader(name, value, false);
+      }
+
+      const cos = Cc["@mozilla.org/intl/converter-output-stream;1"]
+        .createInstance(Ci.nsIConverterOutputStream);
+      cos.init(response.bodyOutputStream, "UTF-8");
+      cos.writeString(JSON.stringify(body));
+      cos.close();
+
+      response.finish();
     }
 
     /**
@@ -252,6 +314,12 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
             throw new Error("Server already running");
           }
 
+          // Fail closed: a server reachable beyond loopback must be authenticated
+          const loopbackHosts = ["127.0.0.1", "localhost", "::1"];
+          if (!loopbackHosts.includes(self.apiHost) && !self.apiToken) {
+            throw new Error("TB_API_TOKEN is required when TB_API_HOST is not loopback");
+          }
+
           self.server = new HttpServer();
 
           // Catch-all handler
@@ -259,41 +327,64 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
             const requestId = String(++requestCounter);
             response.processAsync();
 
+            // Reject browser-originated requests before authentication so the
+            // rule applies whether or not a token is configured. Non-browser
+            // clients (curl, server-side) send neither Origin nor Sec-Fetch-Site.
+            const reason = rejectReason(request);
+            if (reason) {
+              writeError(response, request.httpVersion, 403, {
+                error: reason === "origin_not_allowed"
+                  ? "Origin is not allowed by TB_API_ALLOWED_ORIGINS"
+                  : "Cross-site browser requests are not allowed",
+                code: reason
+              });
+              return;
+            }
+
+            // Echo CORS headers for allowlisted origins (never a wildcard), so
+            // browsers may read the response. Vary: Origin keeps caches honest.
+            const origin = header(request, "Origin");
+            if (origin) {
+              response.setHeader("Access-Control-Allow-Origin", origin, false);
+              response.setHeader("Vary", "Origin", false);
+            }
+
+            // OPTIONS is only answered as a CORS preflight for allowlisted origins
+            if (request.method === "OPTIONS") {
+              if (!origin) {
+                writeError(response, request.httpVersion, 403, {
+                  error: "OPTIONS requires an allowlisted Origin",
+                  code: "origin_not_allowed"
+                });
+                return;
+              }
+              response.setStatusLine(request.httpVersion, 204, "No Content");
+              response.setHeader("Allow-Methods", "GET, POST, PATCH, DELETE", false);
+              response.setHeader("Allow-Headers", "Authorization, Content-Type", false);
+              response.finish();
+              return;
+            }
+
             // Check authentication if token is configured
             if (self.apiToken) {
-              let authHeader = "";
-              try {
-                authHeader = request.getHeader("Authorization") || "";
-              } catch (e) {
-                // Header not present
-              }
-              
               const expectedToken = `Bearer ${self.apiToken}`;
-              if (authHeader !== expectedToken) {
-                response.setStatusLine(request.httpVersion, 401, "Unauthorized");
-                response.setHeader("Content-Type", "application/json; charset=utf-8", false);
-                response.setHeader("WWW-Authenticate", "Bearer", false);
-                
-                const cos = Cc["@mozilla.org/intl/converter-output-stream;1"]
-                  .createInstance(Ci.nsIConverterOutputStream);
-                cos.init(response.bodyOutputStream, "UTF-8");
-                cos.writeString(JSON.stringify({
+              if (!secretsEqual(header(request, "Authorization"), expectedToken)) {
+                writeError(response, request.httpVersion, 401, {
                   error: "Unauthorized",
                   message: "Valid Bearer token required in Authorization header"
-                }));
-                cos.close();
-                response.finish();
+                }, { "WWW-Authenticate": "Bearer" });
                 return;
               }
             }
 
-            // Read body for POST/PATCH
+            // Read body for POST/PATCH/DELETE
             // nsIScriptableInputStream.read() is used because it respects available()
             // and won't block waiting for EOF (unlike nsIConverterInputStream in a loop).
             // The raw bytes are then decoded from UTF-8 via escape/decodeURIComponent so
             // multi-byte characters (em dashes, smart quotes, emoji, etc.) are preserved.
             let body = "";
-            if ((request.method === "POST" || request.method === "PATCH") && request.bodyInputStream) {
+            const method = request.method;
+            if ((method === "POST" || method === "PATCH" || method === "DELETE") && request.bodyInputStream) {
               const sis = Cc["@mozilla.org/scriptableinputstream;1"]
                 .createInstance(Ci.nsIScriptableInputStream);
               sis.init(request.bodyInputStream);
@@ -312,13 +403,23 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
               }
             }
 
+            // A body must be JSON: this blocks "simple" cross-site POSTs that
+            // browsers send without a preflight. Empty bodies stay allowed.
+            if ((method === "POST" || method === "PATCH" || method === "DELETE") &&
+                body !== "" && !header(request, "Content-Type").startsWith("application/json")) {
+              writeError(response, request.httpVersion, 415, {
+                error: "Content-Type must be application/json when a body is sent",
+                code: "unsupported_media_type"
+              });
+              return;
+            }
+
             self.pendingRequests.set(requestId, {
               response,
               httpVersion: request.httpVersion
             });
 
             const path = request.path;
-            const method = request.method;
             const queryString = request.queryString;
 
             // Handle calendar routes directly in experiment context

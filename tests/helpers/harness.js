@@ -612,9 +612,20 @@ function experimentHarness(options = {}) {
   }
 
   class EventManager {
-    constructor({ register }) { this.register = register; }
+    constructor({ register, name }) { this.register = register; this.name = name; }
     api() {
-      return { addListener: listener => this.register({ async: payload => listener(payload) }) };
+      return {
+        addListener: listener => this.register({
+          async: payload => {
+            // Observe experiment -> background dispatch so tests can assert that
+            // a rejected request never fires a background event.
+            if (this.name === "httpServer.onRequest") {
+              events.push(["background-request", payload.method, payload.path]);
+            }
+            return listener(payload);
+          }
+        })
+      };
     }
   }
 
