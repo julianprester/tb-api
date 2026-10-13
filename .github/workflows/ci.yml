@@ -13,6 +13,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Check JSON validity
         run: |
           echo "Checking tb-api/manifest.json..."
@@ -30,8 +35,15 @@ jobs:
           done
           echo "All JavaScript files have valid syntax"
 
-      - name: Test API behavior (mocked Thunderbird APIs)
+      - name: Test API behavior (mocked Thunderbird APIs, TZ=Australia/Sydney)
         run: node --test tests/test-*.js
+        env:
+          TZ: Australia/Sydney
+
+      - name: Test API behavior (mocked Thunderbird APIs, TZ=America/New_York)
+        run: node --test tests/test-*.js
+        env:
+          TZ: America/New_York
 
   build:
     name: Build

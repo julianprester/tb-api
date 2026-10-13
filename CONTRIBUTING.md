@@ -62,7 +62,12 @@ Feature requests are welcome! Please:
    git checkout -b feature/your-feature-name
    ```
 3. Make your changes
-4. Test your changes using the test scripts:
+4. Run the required test suite (mocked Thunderbird APIs, no running instance needed):
+   ```bash
+   node --test tests/test-*.js
+   ```
+   CI runs this suite on Node 22 under both `TZ=Australia/Sydney` and `TZ=America/New_York`, so date/time-zone-sensitive bugs are caught.
+   Optionally, run the live checks against a running Thunderbird instance:
    ```bash
    ./tests/test-api.sh
    ./tests/test-write-api.sh
@@ -94,7 +99,15 @@ We follow conventional commits:
 
 ## Testing
 
-Run the test scripts before submitting:
+Run the required check before submitting (mocked Thunderbird APIs, no running instance needed):
+
+```bash
+node --test tests/test-*.js
+```
+
+CI runs this suite on Node 22 under both `TZ=Australia/Sydney` and `TZ=America/New_York`.
+
+The shell scripts below are **optional live checks**: they exercise a real Thunderbird instance with the extension loaded and are not run in CI.
 
 ```bash
 # Read-only endpoint tests

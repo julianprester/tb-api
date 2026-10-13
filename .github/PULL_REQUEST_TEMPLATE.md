@@ -22,10 +22,11 @@ Fixes #(issue number)
 
 ## Testing
 
+- [ ] Ran `node --test tests/test-*.js` (required check; CI runs it on Node 22 under `TZ=Australia/Sydney` and `TZ=America/New_York`)
 - [ ] Tested manually with Thunderbird
-- [ ] Ran `./tests/test-api.sh`
-- [ ] Ran `./tests/test-write-api.sh`
-- [ ] Ran `./tests/test-comprehensive.sh`
+- [ ] Ran `./tests/test-api.sh` (optional live check)
+- [ ] Ran `./tests/test-write-api.sh` (optional live check)
+- [ ] Ran `./tests/test-comprehensive.sh` (optional live check)
 
 ## Checklist
 
