@@ -68,6 +68,10 @@ test("OPTIONS preflights are answered for allowlisted origins and refused otherw
   assert.equal(preflight.status, 204);
   assert.equal(preflight.headers["Access-Control-Allow-Origin"], APP_ORIGIN);
   assert.equal(preflight.headers["Vary"], "Origin");
+  // Browsers require the Access-Control-* spellings for the preflight to pass.
+  assert.equal(preflight.headers["Access-Control-Allow-Methods"], "GET, POST, PATCH, DELETE");
+  assert.equal(preflight.headers["Access-Control-Allow-Headers"], "Authorization, Content-Type");
+  // The documented bare names are still sent alongside them.
   assert.equal(preflight.headers["Allow-Methods"], "GET, POST, PATCH, DELETE");
   assert.equal(preflight.headers["Allow-Headers"], "Authorization, Content-Type");
 

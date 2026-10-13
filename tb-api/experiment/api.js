@@ -359,6 +359,10 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
                 return;
               }
               response.setStatusLine(request.httpVersion, 204, "No Content");
+              // Browsers only honour the Access-Control-* spellings; the bare
+              // names are kept for compatibility with the documented contract.
+              response.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE", false);
+              response.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type", false);
               response.setHeader("Allow-Methods", "GET, POST, PATCH, DELETE", false);
               response.setHeader("Allow-Headers", "Authorization, Content-Type", false);
               response.finish();
