@@ -2,9 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const vm = require("node:vm");
+const { backgroundHarness } = require("./helpers/harness.js");
 
 function harness() {
   const folder = { id: "account1://INBOX", name: "Inbox" };
@@ -19,56 +17,15 @@ function harness() {
     flagged: !read,
     folder
   }));
-  const queries = [];
-  const updates = [];
-  const messenger = {
-    messages: {
-      async query(info) {
-        queries.push(info);
-        return { messages: messages.filter(message =>
-          (info.headerMessageId === undefined || message.headerMessageId === info.headerMessageId) &&
-          (info.folderId === undefined || message.folder.id === info.folderId) &&
-          (info.unread === undefined || !message.read === info.unread)
-        ).map(message => ({ ...message })) };
-      },
-      async getFull() { return { headers: {} }; },
-      async listAttachments() { return []; },
-      async listInlineTextParts() { return [{ contentType: "text/plain", content: "Synthetic body" }]; },
-      async update(id, properties) {
-        updates.push({ id, properties });
-        Object.assign(messages.find(message => message.id === id), properties);
-      }
-    },
-    folders: {
-      async get(id) {
-        if (id !== folder.id) throw new Error("Folder not found");
-        return folder;
-      }
-    }
+  const h = backgroundHarness({ messages, folders: [folder] });
+  return {
+    Email: h.Email,
+    messages: h.messages,
+    queries: h.queries,
+    updates: h.updates,
+    request: h.request,
+    folder
   };
-  const context = vm.createContext({
-    messenger,
-    browser: {
-      runtime: { getManifest: () => JSON.parse(fs.readFileSync(path.join(__dirname, "..", "tb-api", "manifest.json"), "utf8")) },
-      httpServer: {
-        start: async () => {},
-        onRequest: { addListener() {} },
-        onSendInvitation: { addListener() {} },
-        refreshFolder: async id => ({ folder_id: id, refreshed: true })
-      }
-    },
-    console: { log() {}, error() {} }
-  });
-  for (const name of ["api/utils.js", "api/email.js", "background.js"]) {
-    const file = path.join(__dirname, "..", "tb-api", name);
-    vm.runInContext(fs.readFileSync(file, "utf8"), context, { filename: name });
-  }
-
-  async function request(method, pathname, queryString = "", body = "") {
-    const result = await context.handleRequest({ method, path: pathname, queryString, body });
-    return { status: result.statusCode, body: JSON.parse(result.body) };
-  }
-  return { Email: context.Email, messages, queries, updates, request, folder };
 }
 
 function assertReadState(message, expected) {
