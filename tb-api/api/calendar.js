@@ -297,92 +297,59 @@ function applyDateFields(target, oldItem, { start, end, allDay }, cal) {
 }
 
 /**
- * Format date as iCalendar datetime (YYYYMMDDTHHMMSSZ)
+ * Email addresses of the user's own sending identities (D8).
+ *
+ * `MailServices.accounts.allIdentities` is an nsIArray/nsISupportsArray in
+ * Thunderbird; a plain array in tests. Returns null when the account manager
+ * is unavailable, so callers can tell "no identity matches" apart from
+ * "cannot check on this Thunderbird build".
  */
-function formatIcsDate(date) {
-  return date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+function ownIdentityEmails(Ci) {
+  let accounts = null;
+  try {
+    accounts = typeof MailServices !== "undefined" && MailServices ? MailServices.accounts : null;
+  } catch (e) {
+    accounts = null;
+  }
+  if (!accounts || !accounts.allIdentities) return null;
+
+  const all = accounts.allIdentities;
+  const emails = [];
+  const add = identity => {
+    if (identity && identity.email) emails.push(String(identity.email));
+  };
+
+  if (Array.isArray(all) || typeof all[Symbol.iterator] === "function") {
+    for (const identity of all) add(identity);
+    return emails;
+  }
+
+  try {
+    if (typeof all.length === "number" && typeof all.queryElementAt === "function") {
+      for (let i = 0; i < all.length; i++) add(all.queryElementAt(i, Ci.nsIMsgIdentity));
+      return emails;
+    }
+    if (typeof all.Count === "function" && typeof all.QueryElementAt === "function") {
+      for (let i = 0; i < all.Count(); i++) add(all.QueryElementAt(i, Ci.nsIMsgIdentity));
+      return emails;
+    }
+  } catch (e) {
+    return null;
+  }
+  return null;
 }
 
 /**
- * Escape text for iCalendar format
+ * Whether sending invitation emails immediately is enabled (D8). Fails
+ * closed: an unreadable environment counts as disabled.
  */
-function escapeIcsText(text) {
-  if (!text) return "";
-  return text
-    .replace(/\\/g, "\\\\")
-    .replace(/;/g, "\\;")
-    .replace(/,/g, "\\,")
-    .replace(/\n/g, "\\n");
-}
-
-/**
- * Generate iCalendar (ICS) content for an event invitation
- * @param {Object} eventData - Event details
- * @param {string} method - iTIP method (REQUEST, CANCEL, etc.)
- * @returns {string} ICS content
- */
-function generateIcsInvitation(eventData, method = "REQUEST") {
-  const { id, title, start, end, location, description, organizer, attendees } = eventData;
-  
-  const lines = [
-    "BEGIN:VCALENDAR",
-    "VERSION:2.0",
-    "PRODID:-//Thunderbird REST API//EN",
-    "CALSCALE:GREGORIAN",
-    `METHOD:${method}`,
-    "BEGIN:VEVENT",
-    `UID:${id}@thunderbird-api`,
-    `DTSTAMP:${formatIcsDate(new Date())}`,
-    `DTSTART:${formatIcsDate(new Date(start))}`,
-    `DTEND:${formatIcsDate(new Date(end))}`,
-    `SUMMARY:${escapeIcsText(title)}`,
-    "SEQUENCE:0",
-    "STATUS:CONFIRMED"
-  ];
-  
-  if (location) {
-    lines.push(`LOCATION:${escapeIcsText(location)}`);
+function sendingAllowed(Cc, Ci) {
+  try {
+    const env = Cc["@mozilla.org/process/environment;1"].getService(Ci.nsIEnvironment);
+    return env.get("TB_API_ALLOW_SEND") === "1";
+  } catch (e) {
+    return false;
   }
-  
-  if (description) {
-    lines.push(`DESCRIPTION:${escapeIcsText(description)}`);
-  }
-  
-  // Add organizer
-  if (organizer) {
-    const orgEmail = typeof organizer === "string" ? organizer : organizer.email;
-    const orgName = typeof organizer === "string" ? null : organizer.name;
-    if (orgName) {
-      lines.push(`ORGANIZER;CN=${escapeIcsText(orgName)}:mailto:${orgEmail}`);
-    } else {
-      lines.push(`ORGANIZER:mailto:${orgEmail}`);
-    }
-  }
-  
-  // Add attendees
-  if (attendees && Array.isArray(attendees)) {
-    for (const att of attendees) {
-      const attEmail = typeof att === "string" ? att : att.email;
-      const attName = typeof att === "string" ? null : att.name;
-      const attRole = typeof att === "string" ? "REQ-PARTICIPANT" : (att.role || "REQ-PARTICIPANT");
-      const attStatus = typeof att === "string" ? "NEEDS-ACTION" : (att.status || "NEEDS-ACTION");
-      
-      let attendeeLine = "ATTENDEE";
-      attendeeLine += `;ROLE=${attRole}`;
-      attendeeLine += `;PARTSTAT=${attStatus}`;
-      attendeeLine += ";RSVP=TRUE";
-      if (attName) {
-        attendeeLine += `;CN=${escapeIcsText(attName)}`;
-      }
-      attendeeLine += `:mailto:${attEmail}`;
-      lines.push(attendeeLine);
-    }
-  }
-  
-  lines.push("END:VEVENT");
-  lines.push("END:VCALENDAR");
-  
-  return lines.join("\r\n");
 }
 
 // =============================================================================
@@ -684,6 +651,25 @@ async function createEvent(params, cal, Ci, Cc) {
     ]);
   }
 
+  // D8: invitations are opt-in. `sendInvites` is the strict boolean alias
+  // (Task 3.4); `inviteMode` picks the mode. "draft" (the default) saves a
+  // draft, "send" sends immediately but only with TB_API_ALLOW_SEND=1.
+  let inviteMode = normalized.inviteMode;
+  if (inviteMode !== undefined && inviteMode !== "draft" && inviteMode !== "send") {
+    return Utils.fail("invalid_parameter", `Invalid inviteMode "${inviteMode}"`, 400, [
+      'Use inviteMode: "draft" (the default) to save the invitation as a draft',
+      'Use inviteMode: "send" (with TB_API_ALLOW_SEND=1) to send it immediately'
+    ]);
+  }
+  const invitationsRequested = sendInvites === true || inviteMode !== undefined;
+  if (inviteMode === undefined) inviteMode = "draft";
+  if (inviteMode === "send" && !sendingAllowed(Cc, Ci)) {
+    return Utils.fail("sending_disabled", "Sending invitations is disabled", 403, [
+      "Set the environment variable TB_API_ALLOW_SEND=1 to allow sending",
+      'Use inviteMode: "draft" to save invitations as drafts instead'
+    ]);
+  }
+
   // allDay is a boolean filter too (D5): an unrecognized supplied value must
   // not silently behave like false (a timed event at midnight). Absent = false.
   const allDayParam = parseAllDay(normalized.allDay);
@@ -710,6 +696,22 @@ async function createEvent(params, cal, Ci, Cc) {
       "Use ISO format: 2024-01-15T11:00:00",
       "Or relative: tomorrow"
     ]);
+  }
+
+  // D8: an organizer must be one of the user's own identities. The old code
+  // accepted any address and the background then silently sent from
+  // identities[0]; a mismatch is rejected before the event is created.
+  const organizerEmail = organizer === undefined || organizer === null
+    ? null
+    : (typeof organizer === "string" ? organizer : organizer.email);
+  if (typeof organizerEmail === "string" && organizerEmail) {
+    const identities = ownIdentityEmails(Ci);
+    if (identities && !identities.some(email => email.toLowerCase() === organizerEmail.toLowerCase())) {
+      return Utils.fail("invalid_parameter", `Organizer "${organizerEmail}" is not one of your identities`, 400, [
+        identities.length > 0 ? `Your identities: ${identities.join(", ")}` : "No sending identities are configured",
+        "Organizer must match one of the accounts you can send from"
+      ]);
+    }
   }
 
   // Auto-select calendar if not specified
@@ -851,7 +853,7 @@ async function createEvent(params, cal, Ci, Cc) {
       }
     }
 
-    await found.calendar.addItem(event);
+    const savedEvent = (await found.calendar.addItem(event)) || event;
 
     // Build response
     const response = {
@@ -884,34 +886,38 @@ async function createEvent(params, cal, Ci, Cc) {
         };
       });
       
-      // If sendInvites is requested, include invitation data for the background script to send
-      if (sendInvites) {
+      // If invitations were requested, hand the ICS to the background as
+      // invitation data (the background prepares or sends the mail).
+      if (invitationsRequested) {
         if (!organizer) {
-          response.warning = "sendInvites requested but no organizer specified. Invitations not sent.";
+          response.warning = "Invitations requested but no organizer specified. Invitations not sent.";
         } else {
-          // Generate ICS content for the invitation (invitation formatting for
-          // all-day events is Task 5.4's scope; here the stored instant is kept)
-          const eventData = {
-            id: event.id,
-            title,
-            start: cal.dtz.dateTimeToJSDate(event.startDate).toISOString(),
-            end: cal.dtz.dateTimeToJSDate(event.endDate).toISOString(),
-            location,
-            description,
-            organizer,
-            attendees
-          };
-          
-          response._invitationData = {
-            icsContent: generateIcsInvitation(eventData, "REQUEST"),
-            recipients: attendees.map(att => typeof att === "string" ? att : att.email),
-            subject: `Invitation: ${title}`,
-            organizerEmail: typeof organizer === "string" ? organizer : organizer.email
-          };
-          response.invitesPending = true;
+          try {
+            // Serialize the item returned by addItem, not the pre-save object:
+            // its UID is exactly event.id, and Thunderbird's serializer handles
+            // escaping, line folding, VTIMEZONE, SEQUENCE and DTSTAMP.
+            const serializer = Cc["@mozilla.org/calendar/ics-serializer;1"].createInstance(Ci.calIIcsSerializer);
+            serializer.addItems([savedEvent]);
+            const method = cal.icsService.createIcalProperty("METHOD");
+            method.value = "REQUEST";
+            serializer.addProperty(method);
+
+            response._invitationData = {
+              icsContent: serializer.serializeToString(),
+              recipients: attendees.map(att => typeof att === "string" ? att : att.email),
+              subject: `Invitation: ${title}`,
+              organizerEmail,
+              eventTitle: title,
+              mode: inviteMode
+            };
+          } catch (e) {
+            // The event already exists: a failed invitation must be reported
+            // as a warning, never as a failed creation.
+            response.warning = `Could not build the invitation: ${e.message}`;
+          }
         }
       } else {
-        response.note = "Invitation emails are NOT automatically sent. Use sendInvites:true to send invitations.";
+        response.note = "Invitation emails are NOT automatically sent. Use sendInvites:true or inviteMode to prepare invitations.";
       }
     }
 

@@ -329,6 +329,7 @@ const ALIASES = {
     organizer: ["host", "owner", "creator"],
     attendees: ["participants", "invitees", "guests", "people"],
     sendInvites: ["send_invites", "sendInvitations", "send_invitations", "notify"],
+    inviteMode: ["invite_mode"],
     allDay: ["all_day"]
   }
 };

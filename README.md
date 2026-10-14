@@ -11,7 +11,7 @@ A Thunderbird extension that exposes email, calendar, and contacts via a REST AP
 - **LLM-friendly design**: Flexible parameter aliases, fuzzy matching, and helpful error messages with suggestions
 - **Natural language dates**: Use "today", "tomorrow", "2 days ago", "next week", or ISO 8601 formats
 - **Smart defaults**: Auto-selects calendars/address books when only one writable option exists
-- **Calendar invitations**: Create events with attendees and send ICS invitation emails
+- **Calendar invitations**: Create events with attendees and prepare ICS invitation drafts; opt in to sending immediately with `TB_API_ALLOW_SEND=1`
 - **Opt-in folder refresh**: Synchronize an IMAP folder before searching its local messages
 
 ## Installation
@@ -399,11 +399,29 @@ Content-Type: application/json
 | calendar | calendarId, cal | Auto* | Calendar ID or name |
 | location | place, where | No | Event location |
 | description | desc, details, notes | No | Event description |
-| organizer | host, owner | No | Organizer email or {email, name} |
+| organizer | host, owner | No | Organizer email or {email, name}; must be one of your identities |
 | attendees | participants, invitees, guests | No | Array of emails or {email, name, role, status} |
-| sendInvites | send_invites, notify | No | Send ICS invitation emails (requires organizer) |
+| sendInvites | send_invites, notify | No | Strict boolean alias for `inviteMode: "draft"` |
+| inviteMode | invite_mode | No | `draft` (default) saves the invitation as a draft; `send` sends immediately (requires `TB_API_ALLOW_SEND=1`) |
 
 *Calendar auto-selected if only one writable calendar exists
+
+Creating an event returns `201 Created` with `invitations: { "status": "draft_saved"
+| "sent" | "queued" | "failed", "error"? }` when invitations were requested.
+
+**Invitations are drafts by default.** `sendInvites: true` (or
+`inviteMode: "draft"`) creates a mail in the Drafts folder with `invite.ics`
+attached; nothing is sent. Sending immediately requires **both**
+`inviteMode: "send"` and the environment variable `TB_API_ALLOW_SEND=1`
+(without it the request is `403 sending_disabled` and no event is created).
+`inviteMode: "send"` cannot be combined with anything else to bypass this.
+
+Invitations are **not** sent by `PATCH /events/:id` or `DELETE /events/:id`:
+edits and cancellations do not mail the attendees.
+
+`organizer` must match one of the sending identities configured in
+Thunderbird; anything else is `400 invalid_parameter` and no event is created
+(the API never silently sends from a different account).
 
 #### Update Event
 
@@ -576,6 +594,7 @@ recommend a fix.
 | Code | Description |
 |------|-------------|
 | 200 | Success |
+| 201 | Created (`POST /events`) |
 | 207 | Partial success (some messages were updated/moved, some failed) |
 | 400 | Bad request (missing/invalid parameters) |
 | 403 | Forbidden (read-only target, sending disabled, rejected origin) |
@@ -607,6 +626,20 @@ Authorization: Bearer your-secret-token
 ```
 
 See [SECURITY.md](SECURITY.md) for more details.
+
+### Sending invitations
+
+Calendar invitations are saved as **drafts** by default, matching the
+"drafts only" promise of `POST /messages`. To let `POST /events` send an
+invitation immediately, set:
+
+```bash
+export TB_API_ALLOW_SEND=1
+```
+
+and pass `"inviteMode": "send"`. `sendInvites: true` always prepares a draft,
+with or without the variable. Without the variable a `send` request is refused
+with `403 sending_disabled` and no event is created.
 
 ---
 
