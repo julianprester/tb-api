@@ -247,9 +247,11 @@ must not be treated as `false`.
 With the default `include_preview=true`, each returned message also includes
 `has_attachment` (boolean) and `preview` (first 500 characters of the plain-text
 body). Both require opening the message's MIME tree, which on IMAP folders not
-stored offline downloads message content. Set `include_preview=false` for a cheap
-header-only listing: `preview` and `has_attachment` are then omitted entirely and
-no message bodies are read. This is useful for triaging which messages to fetch
+stored offline downloads message content. `has_attachment` is omitted (not
+`false`) when that MIME call fails, so an absent value means unknown. Set
+`include_preview=false` for a cheap header-only listing: `preview` and
+`has_attachment` are then omitted entirely and no message bodies are read. This
+is useful for triaging which messages to fetch
 in full afterwards.
 
 #### Get Message

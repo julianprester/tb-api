@@ -63,6 +63,27 @@ test("has_attachment is true exactly when listAttachments returns entries", asyn
   assert.deepEqual(opened.sort(), [1, 2, 3], "every returned message is checked once");
 });
 
+test("has_attachment is omitted when the attachment check throws (M9)", async () => {
+  const h = backgroundHarness({
+    folders: [INBOX],
+    messages: [makeMessage(1)],
+    messenger: {
+      messages: {
+        async listAttachments() { throw new Error("synthetic MIME failure"); }
+      }
+    }
+  });
+
+  const result = await h.Email.searchMessages({ limit: 10 });
+  assert.equal(result.messages.length, 1);
+  assert.equal(
+    Object.hasOwn(result.messages[0], "has_attachment"),
+    false,
+    "an unavailable MIME tree is unknown, not has_attachment: false"
+  );
+  assert.equal(Object.hasOwn(result.messages[0], "preview"), true, "the preview key is still reported");
+});
+
 test("attachment checks run only for returned matches and share the 8-slot batch", async () => {
   let active = 0;
   let maxActive = 0;

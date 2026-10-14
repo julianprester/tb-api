@@ -371,7 +371,10 @@ async function searchMessages(params) {
     formatted.push(...await Promise.all(
       matches.slice(start, start + SEARCH_MIME_CONCURRENCY).map(async (msg) => {
         let preview = "";
-        let hasAttachment = false;
+        // null means unknown: the key is omitted when the MIME call fails,
+        // exactly like answered/forwarded. Only a successful
+        // listAttachments call may report true or false (M9).
+        let hasAttachment = null;
         if (includePreview) {
           try {
             const parts = await messenger.messages.listInlineTextParts(msg.id);
@@ -414,8 +417,12 @@ async function searchMessages(params) {
           mailbox: msg.folder?.name || "",
           // Omitting both keys (rather than returning empty values) is the
           // contract of include_preview=false: no body was read, so the
-          // response claims nothing about preview or attachments.
-          ...(includePreview ? { has_attachment: hasAttachment, preview } : {})
+          // response claims nothing about preview or attachments. With
+          // include_preview=true, has_attachment is omitted only when its
+          // MIME call failed, because then the value is unknown.
+          ...(includePreview
+            ? { ...(hasAttachment === null ? {} : { has_attachment: hasAttachment }), preview }
+            : {})
         };
       })
     ));
