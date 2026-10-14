@@ -147,11 +147,30 @@ test("plus is a space except in an ISO timezone offset", () => {
   );
 });
 
-test("every DATE_SUGGESTIONS example parses", () => {
+test("prototype keys are not weekdays and overflowing numbers are rejected", () => {
+  // `WEEKDAYS[key]` used to walk the prototype chain: "constructor" resolved to
+  // `Object` and returned a truthy Date, while "this constructor" returned a
+  // truthy Invalid Date.
+  assert.equal(parse("constructor"), null, "prototype key must not be a weekday");
+  assert.equal(parse("this constructor"), null, "this + prototype key");
+  assert.equal(parse("next constructor"), null, "next + prototype key");
+  assert.equal(parse("last constructor"), null, "last + prototype key");
+
+  // Unbounded N used to overflow the Date constructor and yield a truthy
+  // Invalid Date instead of null.
+  assert.equal(parse("99999999999999999999 days ago"), null, "overflowing days ago");
+  assert.equal(parse("in 99999999999999999999 days"), null, "overflowing in N days");
+  assert.equal(parse("99999999999999999999 weeks ago"), null, "overflowing weeks ago");
+  assert.equal(parse("in 99999999999999999999 months"), null, "overflowing in N months");
+});
+
+test("every DATE_SUGGESTIONS example parses to a valid Date", () => {
   const suggestions = h.Utils.DATE_SUGGESTIONS;
   assert.ok(Array.isArray(suggestions) && suggestions.length > 0, "non-empty list");
   for (const example of suggestions) {
-    assert.ok(parse(example), `suggestion does not parse: ${example}`);
+    const result = parse(example);
+    assert.ok(result, `suggestion does not parse: ${example}`);
+    assert.ok(Number.isFinite(result?.getTime()), `suggestion parses to an Invalid Date: ${example}`);
   }
 });
 
@@ -189,7 +208,7 @@ test("email and calendar accept identical date inputs (one parser)", async t => 
     assert.equal(calendar.status, 200, `calendar rejected ${input}: ${JSON.stringify(calendar.body)}`);
   }
 
-  const rejected = ["Jan 15", "garbage", "next fortnight"];
+  const rejected = ["Jan 15", "garbage", "next fortnight", "constructor", "99999999999999999999 days ago"];
   for (const input of rejected) {
     const email = await h.request("GET", "/messages", { queryString: `after=${encodeURIComponent(input)}` });
     assert.equal(email.status, 400, `email accepted ${input}`);

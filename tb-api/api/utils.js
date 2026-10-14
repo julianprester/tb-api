@@ -129,6 +129,18 @@ function validLocalDate(year, month, day) {
  * `2024-01-15T10:30:00+02:00` keeps its offset.
  */
 function parseDate(input, { now = new Date() } = {}) {
+  const result = parseDateImpl(input, { now });
+  // Overflow ("99999999999999999999 days ago") and impossible arithmetic can
+  // still yield an Invalid Date; report those as unparseable like any other
+  // bad input instead of returning a truthy Invalid Date.
+  return Number.isFinite(result?.getTime()) ? result : null;
+}
+
+/**
+ * Internal implementation behind `parseDate`. Callers must use `parseDate`,
+ * which additionally rejects Invalid Dates produced by arithmetic overflow.
+ */
+function parseDateImpl(input, { now = new Date() } = {}) {
   if (input === null || input === undefined) return null;
 
   const raw = String(input).trim();
@@ -170,7 +182,9 @@ function parseDate(input, { now = new Date() } = {}) {
 
   // Weekdays: "monday", "next monday", "last monday", "this monday"
   const weekdayMatch = lower.match(/^(?:(next|last|this)\s+)?([a-z]+)$/);
-  if (weekdayMatch && WEEKDAYS[weekdayMatch[2]]) {
+  // Own-property lookup: plain `WEEKDAYS[key]` would walk the prototype chain
+  // and accept words like "constructor" (-> Object) as weekdays.
+  if (weekdayMatch && Object.hasOwn(WEEKDAYS, weekdayMatch[2])) {
     const target = WEEKDAYS[weekdayMatch[2]];
     const today = isoWeekday(midnight);
     if (weekdayMatch[1] === "this") {
