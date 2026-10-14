@@ -2,11 +2,9 @@
 
 // Regression tests for the twelve bugs reproduced during the review (plan 0.2).
 // Each case is added by the task that fixes it; this file was created by Task
-// 2.1. The 2.1/2.4/2.5/3.1/3.3 cases are present below; the remaining cases,
-// with their owning task:
+// 2.1. The 2.1/2.4/2.5/3.1/3.2/3.3 cases are present below; the remaining
+// cases, with their owning task:
 //
-//   3.2  PATCH move_to + add_flags applies both; all moves failing -> not
-//        success; flags: ["unread"] marks unread
 //   3.4  unread=yes -> 400 invalid_filter
 //   5.2  GET /events?start=garbage -> 400
 
@@ -114,6 +112,77 @@ test("3.3: move_to \"Archive 2023\" with only \"Archive 2022\" -> 404, nothing m
   assert.equal(patch.body.code, "folder_not_found");
   assert.equal(moved.length, 0, "a fuzzy destination must never move mail");
   assert.equal(h.messages[0].folder.id, "account1:/Inbox");
+});
+
+test("3.2: PATCH move_to + add_flags applies both to the same message", async () => {
+  const inbox = { id: "account1:/Inbox", name: "Inbox", role: "inbox" };
+  const moved = [];
+  const h = backgroundHarness({
+    folders: [inbox, { id: "account1:/Archive", name: "Archive" }],
+    messages: [{ id: 1, headerMessageId: "both@example.test", read: false, folder: inbox }],
+    messenger: {
+      messages: {
+        async move(ids, folderId) { moved.push({ ids, folderId }); }
+      }
+    }
+  });
+
+  const patch = await h.request("PATCH", "/messages", "", JSON.stringify({
+    ids: [1],
+    add_flags: ["read"],
+    move_to: "Archive"
+  }));
+  assert.equal(patch.status, 200);
+  assert.equal(patch.body.success, true);
+  assert.equal(patch.body.updated, 1);
+  assert.equal(patch.body.moved, 1);
+  assert.equal(h.updates.length, 1, "the flags must not be lost to the move");
+  assert.equal(h.updates[0].id, 1);
+  assert.equal(h.updates[0].properties.read, true);
+  assert.deepEqual(plain(moved), [{ ids: [1], folderId: "account1:/Archive" }]);
+});
+
+test("3.2: PATCH with every move failing is not success: true", async () => {
+  const inbox = { id: "account1:/Inbox", name: "Inbox", role: "inbox" };
+  const h = backgroundHarness({
+    folders: [inbox, { id: "account1:/Archive", name: "Archive" }],
+    messages: [
+      { id: 1, headerMessageId: "fail1@example.test", folder: inbox },
+      { id: 2, headerMessageId: "fail2@example.test", folder: inbox }
+    ],
+    messenger: {
+      messages: {
+        async move() { throw new Error("synthetic move failure"); }
+      }
+    }
+  });
+
+  const patch = await h.request("PATCH", "/messages", "", JSON.stringify({
+    ids: [1, 2],
+    move_to: "Archive"
+  }));
+  assert.equal(patch.status, 502);
+  assert.equal(patch.body.code, "update_failed");
+  assert.notEqual(patch.body.success, true, "a failed move must never report success");
+  assert.equal(patch.body.results.length, 2);
+});
+
+test("3.2: PATCH flags: [\"unread\"] marks the message unread", async () => {
+  const inbox = { id: "account1:/Inbox", name: "Inbox", role: "inbox" };
+  const h = backgroundHarness({
+    folders: [inbox],
+    messages: [{ id: 1, headerMessageId: "unread-regression@example.test", read: true, folder: inbox }]
+  });
+
+  const patch = await h.request("PATCH", "/messages", "", JSON.stringify({
+    ids: [1],
+    flags: ["unread"]
+  }));
+  assert.equal(patch.status, 200);
+  assert.equal(patch.body.success, true);
+  assert.equal(h.updates.length, 1);
+  assert.equal(h.updates[0].properties.read, false);
+  assert.equal(h.messages[0].read, false);
 });
 
 test("Malformed JSON / bad % on /events → 400 (no hang, no pending leak)", async t => {

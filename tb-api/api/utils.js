@@ -407,14 +407,29 @@ function errorResponse(message, statusCode = 400, suggestions = null, code = nul
 }
 
 /**
- * Format result as JSON or error response based on result.error
+ * Format result as JSON or error response based on result.error.
+ *
+ * Error results may carry machine-readable extras (ambiguous_target's
+ * `matches`, update_failed's per-message `results`/`not_found`); everything
+ * except `statusCode` is merged into the body. `statusCode` stays internal
+ * metadata. A non-error result may carry an internal `statusCode` too (e.g.
+ * 207 for a partial update); it then drives the HTTP status without being
+ * serialized into the body, exactly like the error path.
  */
 function resultResponse(result, errorStatusCode = 400) {
   if (result.error) {
-    // 409 ambiguous_target lists the conflicting targets so the client can
-    // retry with one of their IDs; other error results carry no extra body.
-    const extra = result.matches ? { matches: result.matches } : null;
-    return errorResponse(result.error, result.statusCode || errorStatusCode, result.suggestions, result.code, extra);
+    const { error, code, statusCode, suggestions, ...extra } = result;
+    return errorResponse(
+      error,
+      statusCode || errorStatusCode,
+      suggestions,
+      code,
+      Object.keys(extra).length > 0 ? extra : null
+    );
+  }
+  if (result.statusCode) {
+    const { statusCode, ...body } = result;
+    return jsonResponse(body, statusCode);
   }
   return jsonResponse(result);
 }

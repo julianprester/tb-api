@@ -512,7 +512,18 @@ async function composeMessage(params) {
 }
 
 /**
- * Update messages (flags, move) with flexible flag names
+ * Update messages (flags, move) with flexible flag names.
+ *
+ * Everything is validated before anything is changed: unknown flags and
+ * add/remove conflicts are 400, and a move destination must resolve exactly
+ * (write mode) before the first update or move.
+ *
+ * Flags are applied first by stable internal ID, then the move (moving can
+ * change folder-relative state). Each message gets its own outcome in
+ * `results`, and the status tells the truth: 200 when every resolved message
+ * fully succeeded, 207 when some succeeded and some failed (including
+ * unresolved refs, which stay in `not_found`), and 502 when no message could
+ * be updated or moved.
  */
 async function updateMessages(params) {
   // Normalize parameters
@@ -537,9 +548,93 @@ async function updateMessages(params) {
     ]);
   }
 
-  // Resolve message IDs (Message-ID headers or internal IDs) through the
-  // single resolver.
-  const messageIds = [];
+  // Normalize flags before touching anything. Unknown flags are listed in the
+  // error, never silently dropped. "unread"/"unseen" are inverse aliases:
+  // adding them clears `read`, removing them sets `read`.
+  const flagAliases = {
+    read: ["read", "seen", "opened"],
+    flagged: ["flagged", "starred", "important", "flag"],
+    junk: ["junk", "spam"]
+  };
+  const inverseAliases = { unread: "read", unseen: "read" };
+
+  function normalizeFlag(flag) {
+    const lower = typeof flag === "string" ? flag.trim().toLowerCase() : "";
+    if (inverseAliases[lower]) return { property: inverseAliases[lower], inverse: true };
+    for (const [canonical, aliases] of Object.entries(flagAliases)) {
+      if (aliases.includes(lower)) return { property: canonical, inverse: false };
+    }
+    return null;
+  }
+
+  const updates = {};
+  const unknownFlags = [];
+  const conflicts = [];
+
+  function applyFlags(flags, adding) {
+    if (flags === undefined || flags === null) return;
+    const flagList = Array.isArray(flags) ? flags : [flags];
+    for (const flag of flagList) {
+      const normalizedFlag = normalizeFlag(flag);
+      if (!normalizedFlag) {
+        unknownFlags.push(flag);
+        continue;
+      }
+      const value = adding ? !normalizedFlag.inverse : normalizedFlag.inverse;
+      if (Object.prototype.hasOwnProperty.call(updates, normalizedFlag.property) &&
+          updates[normalizedFlag.property] !== value) {
+        conflicts.push(`${normalizedFlag.property} (${adding ? "add" : "remove"} ${JSON.stringify(flag)})`);
+        continue;
+      }
+      updates[normalizedFlag.property] = value;
+    }
+  }
+
+  applyFlags(add_flags, true);
+  applyFlags(remove_flags, false);
+
+  if (unknownFlags.length > 0) {
+    return Utils.fail(
+      "invalid_parameter",
+      `Unknown flag(s): ${unknownFlags.map(flag => JSON.stringify(flag)).join(", ")}`,
+      400,
+      [
+        'Valid flags: "read", "unread", "flagged", "junk"',
+        'Aliases: "seen"/"opened"="read", "unseen"="unread", "starred"/"important"/"flag"="flagged", "spam"="junk"'
+      ]
+    );
+  }
+
+  if (conflicts.length > 0) {
+    return Utils.fail(
+      "invalid_parameter",
+      `Conflicting flags: ${conflicts.join(", ")}`,
+      400,
+      ['Do not add and remove the same flag (or its inverse) in one request']
+    );
+  }
+
+  // Resolve the destination before any update. Moving mail is a write, so the
+  // destination must resolve exactly (ID, role, or case-insensitive name;
+  // never fuzzy).
+  let destination = null;
+  if (move_to) {
+    destination = await resolveMailboxWithSuggestions(move_to, "write");
+    if (destination.error) return destination;
+  }
+
+  if (Object.keys(updates).length === 0 && !destination) {
+    return Utils.fail("invalid_parameter", "No valid action specified", 400, [
+      'Use "add_flags" to add flags: ["read", "unread", "flagged", "junk"]',
+      'Use "remove_flags" to remove flags',
+      'Use "move_to" to move messages to another folder',
+      'Flag aliases: "unread"/"unseen" (inverse of read), "starred"="flagged", "spam"="junk"'
+    ]);
+  }
+
+  // Resolve every message reference (Message-ID headers or internal IDs)
+  // through the single resolver before changing anything.
+  const targets = [];
   const notFound = [];
 
   for (const id of ids) {
@@ -547,11 +642,11 @@ async function updateMessages(params) {
     if (resolved.error) {
       notFound.push(id);
     } else {
-      messageIds.push(resolved.id);
+      targets.push({ ref: id, id: resolved.id });
     }
   }
 
-  if (messageIds.length === 0) {
+  if (targets.length === 0) {
     return {
       ...Utils.fail("not_found", "No valid message IDs found", 404, [
         "Check that the Message-IDs are correct",
@@ -561,80 +656,63 @@ async function updateMessages(params) {
     };
   }
 
-  let count = 0;
+  // Flags first, then the move; each message is independent so one failure
+  // does not stop the others and `results` records exactly what happened.
+  const flagsRequested = Object.keys(updates).length > 0;
+  const results = [];
+  let updatedCount = 0;
+  let movedCount = 0;
 
-  // Handle move. Moving mail is a write, so the destination must resolve
-  // exactly (ID, role, or case-insensitive name; never fuzzy).
-  if (move_to) {
-    const resolved = await resolveMailboxWithSuggestions(move_to, "write");
-    if (resolved.error) return resolved;
-    
-    for (const msgId of messageIds) {
+  for (const target of targets) {
+    const outcome = { ref: target.ref, id: target.id, updated: false, moved: false };
+
+    if (flagsRequested) {
       try {
-        await messenger.messages.move([msgId], resolved.id);
-        count++;
-      } catch (e) {}
-    }
-    
-    const result = { success: true, message: `Moved ${count} message(s) to ${resolved.name}` };
-    if (notFound.length > 0) {
-      result.warnings = [`${notFound.length} message(s) not found and skipped`];
-    }
-    return result;
-  }
-
-  // Handle flags - normalize flag names
-  const updates = {};
-  const validFlags = ["read", "flagged", "junk"];
-  const flagAliases = {
-    read: ["read", "seen", "opened"],
-    flagged: ["flagged", "starred", "important", "flag"],
-    junk: ["junk", "spam"]
-  };
-
-  function normalizeFlag(flag) {
-    const lower = flag.toLowerCase();
-    for (const [canonical, aliases] of Object.entries(flagAliases)) {
-      if (aliases.includes(lower)) return canonical;
-    }
-    return null;
-  }
-
-  function applyFlags(flags, value) {
-    if (!flags) return;
-    const flagList = Array.isArray(flags) ? flags : [flags];
-    for (const flag of flagList) {
-      const normalized = normalizeFlag(flag);
-      if (normalized) {
-        updates[normalized] = value;
+        await messenger.messages.update(target.id, updates);
+        outcome.updated = true;
+        updatedCount++;
+      } catch (e) {
+        outcome.error = `Failed to update flags: ${e && e.message ? e.message : String(e)}`;
       }
     }
+
+    if (destination) {
+      try {
+        await messenger.messages.move([target.id], destination.id);
+        outcome.moved = true;
+        movedCount++;
+      } catch (e) {
+        const reason = `Failed to move: ${e && e.message ? e.message : String(e)}`;
+        outcome.error = outcome.error ? `${outcome.error}; ${reason}` : reason;
+      }
+    }
+
+    results.push(outcome);
   }
 
-  applyFlags(add_flags, true);
-  applyFlags(remove_flags, false);
+  const body = { updated: updatedCount, moved: movedCount, results };
+  if (notFound.length > 0) body.not_found = notFound;
 
-  if (Object.keys(updates).length === 0 && !move_to) {
-    return Utils.fail("invalid_parameter", "No valid action specified", 400, [
-      'Use "add_flags" to add flags: ["read", "flagged", "junk"]',
-      'Use "remove_flags" to remove flags',
-      'Use "move_to" to move messages to another folder',
-      'Flag aliases: "starred"="flagged", "seen"="read", "spam"="junk"'
-    ]);
+  const failures = results.filter(outcome => outcome.error).length + notFound.length;
+  const successes = results.filter(outcome => !outcome.error).length;
+
+  if (failures === 0) {
+    return { success: true, ...body };
   }
 
-  for (const msgId of messageIds) {
-    try {
-      await messenger.messages.update(msgId, updates);
-      count++;
-    } catch (e) {}
+  if (successes > 0) {
+    // Partial success is a real outcome: some messages were changed and some
+    // were not. 207 says so without pretending the request fully succeeded.
+    return { success: false, partial: true, statusCode: 207, ...body };
   }
 
-  const result = { success: true, message: `Updated ${count} message(s)` };
-  if (notFound.length > 0) {
-    result.warnings = [`${notFound.length} message(s) not found and skipped`];
-  }
-  return result;
+  return {
+    ...Utils.fail("update_failed", `Failed to update or move ${results.length} message(s)`, 502, [
+      "Check that the messages still exist and that the destination folder is available",
+      "Use GET /messages to verify the message IDs"
+    ]),
+    ...body
+  };
 }
 
 /**

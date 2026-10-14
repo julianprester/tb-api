@@ -251,7 +251,8 @@ PATCH /messages
 Content-Type: application/json
 ```
 
-Update flags or move messages.
+Update flags and/or move messages. Flags are applied first, then the move;
+both run in the same request and per-message outcomes are reported.
 
 ```json
 {
@@ -269,7 +270,18 @@ Update flags or move messages.
 | remove_flags | removeFlags, remove | Flags to remove |
 | move_to | moveTo, destination, folder, mailbox | Destination folder |
 
-**Flag aliases**: `read`/`seen`, `flagged`/`starred`/`important`, `junk`/`spam`
+**Flag aliases**: `read`/`seen`/`opened`, `flagged`/`starred`/`important`/`flag`, `junk`/`spam`, and the inverse `unread`/`unseen` (`add_flags: ["unread"]` clears `read`; `remove_flags: ["unread"]` sets it). Unknown flags are a `400 invalid_parameter` that names them; a flag may not appear in both `add_flags` and `remove_flags`.
+
+Response shapes:
+
+| Result | Body |
+|--------|------|
+| Every message updated/moved | `200 { "success": true, "updated": n, "moved": n, "results": [...] }` |
+| Some messages failed | `207 { "success": false, "partial": true, "updated": n, "moved": n, "not_found": [...], "results": [...] }` |
+| No message was changed | `502 { "error": "...", "code": "update_failed", "results": [...] }` |
+
+`results` has one entry per resolved message: `{ "ref", "id", "updated", "moved", "error"? }` (`error` is present when the flag update or the move failed). Unresolved `ids` are listed in `not_found` and count as failures. The destination is resolved before any change, so a bad `move_to` returns `404`/`409` and nothing is updated.
+
 
 `ids` entries can be Message-IDs with or without angle brackets (and surrounding
 spaces) or internal numeric IDs. When a Message-ID appears in several folders,
@@ -508,7 +520,7 @@ recommend a fix.
 | `ambiguous_recurrence` | 409 | Recurring event needs `recurrenceId` or `scope=series` |
 | `read_only` | 403 | Calendar or address book is read-only |
 | `sending_disabled` | 403 | Sending invitations is disabled (`TB_API_ALLOW_SEND`) |
-| `update_failed` | 500 | Updating an existing resource failed |
+| `update_failed` | 500/502 | Updating an existing resource failed; `PATCH /messages` uses 502 when no message could be changed |
 | `request_timeout` | 504 | The request was not answered in time |
 
 ### HTTP Status Codes
@@ -516,6 +528,7 @@ recommend a fix.
 | Code | Description |
 |------|-------------|
 | 200 | Success |
+| 207 | Partial success (some messages were updated/moved, some failed) |
 | 400 | Bad request (missing/invalid parameters) |
 | 403 | Forbidden (read-only target, sending disabled, rejected origin) |
 | 404 | Resource not found |

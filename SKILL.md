@@ -38,7 +38,7 @@ curl -s -X POST http://localhost:9595/messages -H "Content-Type: application/jso
 curl -s -X POST http://localhost:9595/messages -H "Content-Type: application/json" \
   -d '{"forward_of":"<message_id@example.com>", "to":"recipient@example.com", "body":"FYI"}'
 
-# Update flags / move messages
+# Update flags and move messages (both are applied in one request)
 curl -s -X PATCH http://localhost:9595/messages -H "Content-Type: application/json" \
   -d '{"ids":["<message_id@example.com>"], "move_to":"Archive", "add_flags":["read"]}'
 
@@ -54,6 +54,7 @@ curl -s "http://localhost:9595/identities"
 - **Date filters required for large mailboxes** - Without `after`/`before`, searches on archive/sent often timeout. Formats: `2024-01-15`, `today`, `yesterday`, `7 days ago`
 - **Read status** - List and single-message responses include boolean `read` (`false` means unread, not unknown). The `flags` array also contains `"read"` for read messages. Avoid `jq '.read // null'` or Python `message.get("read") or None`, which turn valid `false` into null. Older builds omitted the field; reload the updated extension. Getting message content does not mark it read.
 - **Message-IDs work with or without angle brackets** - `<abc123@example.com>`, `abc123@example.com` and surrounding spaces are equivalent (URL-encode `<`, `>`, `@` in GET paths). Prefer Message-IDs over internal numeric IDs; both are accepted for GET and PATCH. When a Message-ID appears in several folders, GET returns the first match plus a `matches` count, and PATCH changes only the first match.
+- **Batch updates are honest** - `PATCH /messages` applies flags first, then the move, and reports one `results` entry per message (`{ "ref", "id", "updated", "moved", "error"? }`). All messages succeeded → `200`; some failed → `207` with `success: false` and `partial: true`; none succeeded → `502 update_failed`. Unresolved `ids` are listed in `not_found`. Flag aliases include the inverse `unread`/`unseen` (`add_flags: ["unread"]` clears `read`); an unknown flag is a `400` that changes nothing.
 - **Drafts only** - `POST /messages` always saves as draft for safety; messages must be sent manually from Thunderbird
 - **Opt-in freshness** - Use `refresh=true` with a specific mailbox to sync IMAP headers before searching. Refresh failures return errors, not stale results. Local folders return an explicit no-op; root/virtual folders and other protocols are unsupported. `timeoutMs` defaults to 30000 (max 60000); this does not guarantee offline body downloads.
 - **Flexible parameters** - Most parameters accept aliases (e.g., `q`/`query`/`search`, `mailbox`/`folder`)

@@ -56,7 +56,9 @@ test("email errors carry the right statusCode and code", async t => {
   assert.equal(badParameter.status, 400);
   assert.equal(badParameter.body.code, "invalid_parameter");
 
-  const unknownIds = await h.Email.updateMessages({ ids: ["nope@example.test"] });
+  // PATCH requires a flag or move action; with one present, unknown IDs
+  // still surface as not_found from the resolver.
+  const unknownIds = await h.Email.updateMessages({ ids: ["nope@example.test"], add_flags: ["read"] });
   assert.equal(unknownIds.code, "not_found");
   assert.equal(unknownIds.statusCode, 404);
   assert.deepEqual([...unknownIds.not_found], ["nope@example.test"]);
