@@ -4,6 +4,17 @@ Docker container for Thunderbird with the tb-api REST API extension pre-installe
 
 Based on [jlesage/docker-thunderbird](https://github.com/jlesage/docker-thunderbird).
 
+## Base Image
+
+The `Dockerfile` builds from a pinned base tag, `jlesage/thunderbird:v26.09.1`
+(set via the `TB_IMAGE` build argument). That release ships **Thunderbird
+151.0.1** (Alpine package `151.0.1-r0`). The version tag is the pin; no image
+digest is recorded.
+
+Upgrading is a deliberate change: bump the `TB_IMAGE` tag (and the version noted
+here), run the integration checklist (Appendix B of the remediation plan), then
+release.
+
 ## Quick Start
 
 ```bash

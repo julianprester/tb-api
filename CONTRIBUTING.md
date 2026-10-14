@@ -6,7 +6,7 @@ Thank you for your interest in contributing to the Thunderbird API extension! Th
 
 ### Prerequisites
 
-- Mozilla Thunderbird 115.0 or later
+- Mozilla Thunderbird 128.0 or later
 - Git
 - A text editor or IDE
 

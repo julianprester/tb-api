@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/julianprester/tb-api/actions/workflows/ci.yml/badge.svg)](https://github.com/julianprester/tb-api/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Thunderbird 115+](https://img.shields.io/badge/Thunderbird-115%2B-blue.svg)](https://www.thunderbird.net/)
+[![Thunderbird 128+](https://img.shields.io/badge/Thunderbird-128%2B-blue.svg)](https://www.thunderbird.net/)
 
 A Thunderbird extension that exposes email, calendar, and contacts via a REST API for AI agents and automation.
 
@@ -719,7 +719,7 @@ Creates `tb-api.xpi` package for distribution.
 
 ## Requirements
 
-- Thunderbird 115 or later
+- Thunderbird 128 or later
 
 ## License
 

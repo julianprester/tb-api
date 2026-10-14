@@ -1,7 +1,13 @@
 # Thunderbird with tb-api REST API extension
 # Based on jlesage/thunderbird
+#
+# The base image is pinned to a specific release tag (Thunderbird 151.0.1).
+# Upgrading is a deliberate change: bump TB_IMAGE, run the integration checklist
+# (Appendix B), then release. See README.md.
 
-FROM jlesage/thunderbird:latest
+ARG TB_IMAGE=jlesage/thunderbird:v26.09.1
+
+FROM ${TB_IMAGE}
 
 # Copy the extension
 COPY tb-api.xpi /opt/tb-api/tb-api.xpi
