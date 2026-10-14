@@ -54,82 +54,192 @@ function parseRequestParams(queryString, body) {
 }
 
 /**
- * Parse date string flexibly - accepts many formats:
- * - Relative: "today", "yesterday", "tomorrow", "last week", "2 days ago", "next monday"
- * - ISO 8601: "2024-01-15", "2024-01-15T10:30:00"
- * - Natural: "Jan 15", "January 15 2024", "15/01/2024", "01-15-2024"
+ * Weekday names accepted in relative dates, mapped to ISO weekday numbers
+ * (Monday = 1 .. Sunday = 7).
  */
-function parseDate(dateStr) {
-  if (!dateStr) return null;
-  
-  const lower = dateStr.toLowerCase().trim();
-  const now = new Date();
-  
-  // Relative dates
-  if (lower === "now") {
-    return now;
-  }
-  if (lower === "today") {
-    now.setHours(0, 0, 0, 0);
-    return now;
-  }
-  if (lower === "yesterday") {
-    now.setDate(now.getDate() - 1);
-    now.setHours(0, 0, 0, 0);
-    return now;
-  }
-  if (lower === "tomorrow") {
-    now.setDate(now.getDate() + 1);
-    now.setHours(0, 0, 0, 0);
-    return now;
-  }
-  if (lower === "last week" || lower === "a week ago") {
-    now.setDate(now.getDate() - 7);
-    now.setHours(0, 0, 0, 0);
-    return now;
-  }
-  if (lower === "last month" || lower === "a month ago") {
-    now.setMonth(now.getMonth() - 1);
-    now.setHours(0, 0, 0, 0);
-    return now;
-  }
-  
-  // "N days/weeks/months ago" pattern
+const WEEKDAYS = {
+  monday: 1, mon: 1,
+  tuesday: 2, tue: 2, tues: 2,
+  wednesday: 3, wed: 3,
+  thursday: 4, thu: 4, thur: 4, thurs: 4,
+  friday: 5, fri: 5,
+  saturday: 6, sat: 6,
+  sunday: 7, sun: 7
+};
+
+/** Local midnight of `date` (returns a new Date, never mutates the input). */
+function localMidnight(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+/** Local midnight `days` days away from `date` (never mutates the input). */
+function shiftDays(date, days) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
+}
+
+/** Local time `months` months away from `date` (never mutates the input). */
+function shiftMonths(date, months) {
+  return new Date(date.getFullYear(), date.getMonth() + months, date.getDate());
+}
+
+/** ISO weekday of `date`: Monday = 1 .. Sunday = 7. */
+function isoWeekday(date) {
+  return ((date.getDay() + 6) % 7) + 1;
+}
+
+/**
+ * Local Date for y-m-d at midnight, or null when the calendar date does not
+ * exist. JS would otherwise roll impossible dates over (2024-02-31 -> Mar 2).
+ */
+function validLocalDate(year, month, day) {
+  const date = new Date(year, month - 1, day);
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day
+    ? date
+    : null;
+}
+
+/**
+ * Parse a date string into a Date, returning null for input that is not
+ * recognizably a date.
+ *
+ * `now` is injectable so tests are deterministic; it is copied and never
+ * mutated.
+ *
+ * Accepted forms (all relative forms resolve to LOCAL midnight except "now"):
+ * - `YYYY-MM-DD`                   -> local midnight (decision D9)
+ * - `YYYY-MM-DDTHH:MM[:SS[.sss]]`  -> local time; with `Z`/`+HH:MM` -> that instant
+ * - `now`, `today`, `yesterday`, `tomorrow`
+ * - `last|next week`, `last|next month`, `a week|month ago`
+ * - `N days|weeks|months ago`, `in N days|weeks|months`
+ * - `next|last|this <weekday>`, bare `<weekday>`
+ * - anything else containing a four-digit year that `new Date` understands
+ *   (`Jan 15 2024`, `January 15 2024`, `01-15-2024`, `15/01/2024`, ...).
+ *   Without a four-digit year the input is rejected rather than letting
+ *   `new Date("Jan 15")` silently invent the year 2001.
+ *
+ * Weekdays are Monday-based:
+ * - `next <weekday>` and bare `<weekday>` mean the next occurrence strictly
+ *   after today (today excluded), so `next monday` on a Monday is +7 days.
+ * - `last <weekday>` is the most recent occurrence strictly before today.
+ * - `this <weekday>` is the occurrence in the current ISO week (starting
+ *   Monday), which may be today, in the past, or still ahead.
+ *
+ * A `+` is treated as a space (clients sometimes double-encode spaces), except
+ * when it introduces a timezone offset in an ISO datetime, so
+ * `2024-01-15T10:30:00+02:00` keeps its offset.
+ */
+function parseDate(input, { now = new Date() } = {}) {
+  if (input === null || input === undefined) return null;
+
+  const raw = String(input).trim();
+  if (!raw) return null;
+
+  const isoWithOffset = /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:[Zz]|[+-]\d{2}:?\d{2})$/;
+  const source = isoWithOffset.test(raw) ? raw : raw.replace(/\+/g, " ");
+  const lower = source.toLowerCase();
+
+  const base = new Date(now.getTime());
+  const midnight = localMidnight(base);
+
+  // Single-word relative dates
+  if (lower === "now") return base;
+  if (lower === "today") return midnight;
+  if (lower === "yesterday") return shiftDays(midnight, -1);
+  if (lower === "tomorrow") return shiftDays(midnight, 1);
+
+  if (lower === "last week" || lower === "a week ago") return shiftDays(midnight, -7);
+  if (lower === "next week") return shiftDays(midnight, 7);
+  if (lower === "last month" || lower === "a month ago") return shiftMonths(midnight, -1);
+  if (lower === "next month") return shiftMonths(midnight, 1);
+
+  // "N days|weeks|months ago" and "in N days|weeks|months"
   const agoMatch = lower.match(/^(\d+)\s*(day|days|week|weeks|month|months)\s*ago$/);
   if (agoMatch) {
-    const n = parseInt(agoMatch[1], 10);
-    const unit = agoMatch[2];
-    if (unit.startsWith("day")) {
-      now.setDate(now.getDate() - n);
-    } else if (unit.startsWith("week")) {
-      now.setDate(now.getDate() - n * 7);
-    } else if (unit.startsWith("month")) {
-      now.setMonth(now.getMonth() - n);
-    }
-    now.setHours(0, 0, 0, 0);
-    return now;
+    const n = Number(agoMatch[1]);
+    if (agoMatch[2].startsWith("day")) return shiftDays(midnight, -n);
+    if (agoMatch[2].startsWith("week")) return shiftDays(midnight, -n * 7);
+    return shiftMonths(midnight, -n);
   }
-  
-  // "in N days/weeks" pattern
   const inMatch = lower.match(/^in\s*(\d+)\s*(day|days|week|weeks|month|months)$/);
   if (inMatch) {
-    const n = parseInt(inMatch[1], 10);
-    const unit = inMatch[2];
-    if (unit.startsWith("day")) {
-      now.setDate(now.getDate() + n);
-    } else if (unit.startsWith("week")) {
-      now.setDate(now.getDate() + n * 7);
-    } else if (unit.startsWith("month")) {
-      now.setMonth(now.getMonth() + n);
-    }
-    now.setHours(0, 0, 0, 0);
-    return now;
+    const n = Number(inMatch[1]);
+    if (inMatch[2].startsWith("day")) return shiftDays(midnight, n);
+    if (inMatch[2].startsWith("week")) return shiftDays(midnight, n * 7);
+    return shiftMonths(midnight, n);
   }
-  
-  // Try standard Date parsing (handles ISO 8601 and many other formats)
-  const parsed = new Date(dateStr);
-  return isNaN(parsed.getTime()) ? null : parsed;
+
+  // Weekdays: "monday", "next monday", "last monday", "this monday"
+  const weekdayMatch = lower.match(/^(?:(next|last|this)\s+)?([a-z]+)$/);
+  if (weekdayMatch && WEEKDAYS[weekdayMatch[2]]) {
+    const target = WEEKDAYS[weekdayMatch[2]];
+    const today = isoWeekday(midnight);
+    if (weekdayMatch[1] === "this") {
+      const thisMonday = shiftDays(midnight, -(today - 1));
+      return shiftDays(thisMonday, target - 1);
+    }
+    if (weekdayMatch[1] === "last") {
+      return shiftDays(midnight, -(((today - target + 7) % 7) || 7));
+    }
+    // "next <weekday>" and bare "<weekday>": strictly after today.
+    return shiftDays(midnight, ((target - today + 7) % 7) || 7);
+  }
+
+  // Calendar date, local midnight (D9). `new Date("2024-01-15")` is UTC.
+  const isoDate = source.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoDate) {
+    return validLocalDate(Number(isoDate[1]), Number(isoDate[2]), Number(isoDate[3]));
+  }
+
+  // Numeric dates with the year last. Slash is day-first (international),
+  // dash is month-first (US); an out-of-range month/day swaps the fields
+  // ("31-12-2024", "01/15/2024").
+  const numeric = source.match(/^(\d{1,2})([\/-])(\d{1,2})\2(\d{4})$/);
+  if (numeric) {
+    const first = Number(numeric[1]);
+    const second = Number(numeric[3]);
+    let day, month;
+    if (first > 12 && second <= 12) {
+      day = first; month = second;
+    } else if (second > 12 && first <= 12) {
+      day = second; month = first;
+    } else if (numeric[2] === "-") {
+      month = first; day = second;
+    } else {
+      day = first; month = second;
+    }
+    return validLocalDate(Number(numeric[4]), month, day);
+  }
+
+  // Anything else is trusted only when it carries a four-digit year, because
+  // without one `new Date` silently invents a year ("Jan 15" -> 2001).
+  if (/\d{4}/.test(source)) {
+    const parsed = new Date(source);
+    return isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  return null;
 }
+
+/**
+ * Examples that `parseDate` is guaranteed to accept. Every "could not parse
+ * date" error and the `GET /` tips use this list, so they cannot suggest a
+ * form that does not parse. `tests/test-dates.js` asserts each entry parses.
+ */
+const DATE_SUGGESTIONS = [
+  "2024-01-15",
+  "2024-01-15T10:30:00",
+  "now",
+  "today",
+  "tomorrow",
+  "yesterday",
+  "next week",
+  "last week",
+  "in 3 days",
+  "2 weeks ago",
+  "next monday",
+  "last friday",
+  "Jan 15 2024"
+];
 
 /**
  * Normalize parameter names - accept common aliases
@@ -320,6 +430,7 @@ var Utils = {
   RequestError,
   parseRequestParams,
   parseDate,
+  DATE_SUGGESTIONS,
   normalizeParams,
   ALIASES,
   fuzzyMatch,

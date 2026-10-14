@@ -2,7 +2,8 @@
 "use strict";
 
 // =============================================================================
-// Helper functions (calendar runs in experiment context, no Utils access)
+// Helpers shared with the background scope (utils.js is loaded first; see
+// experiment/api.js)
 // =============================================================================
 
 /**
@@ -17,92 +18,6 @@ function formatLocalDate(date) {
   const pad = (n) => String(n).padStart(2, '0');
   
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
-
-/**
- * Parse date string flexibly - accepts many formats:
- * - Relative: "today", "yesterday", "tomorrow", "last week", "2 days ago"
- * - ISO 8601: "2024-01-15", "2024-01-15T10:30:00"
- * - Natural: "Jan 15", "January 15 2024"
- */
-function parseFlexibleDate(dateStr) {
-  if (!dateStr) return null;
-  
-  const lower = dateStr.toLowerCase().trim();
-  const now = new Date();
-  
-  // Relative dates
-  if (lower === "now") return now;
-  if (lower === "today") {
-    now.setHours(0, 0, 0, 0);
-    return now;
-  }
-  if (lower === "yesterday") {
-    now.setDate(now.getDate() - 1);
-    now.setHours(0, 0, 0, 0);
-    return now;
-  }
-  if (lower === "tomorrow") {
-    now.setDate(now.getDate() + 1);
-    now.setHours(0, 0, 0, 0);
-    return now;
-  }
-  if (lower === "last week" || lower === "a week ago") {
-    now.setDate(now.getDate() - 7);
-    now.setHours(0, 0, 0, 0);
-    return now;
-  }
-  if (lower === "next week") {
-    now.setDate(now.getDate() + 7);
-    now.setHours(0, 0, 0, 0);
-    return now;
-  }
-  if (lower === "last month" || lower === "a month ago") {
-    now.setMonth(now.getMonth() - 1);
-    now.setHours(0, 0, 0, 0);
-    return now;
-  }
-  if (lower === "next month") {
-    now.setMonth(now.getMonth() + 1);
-    now.setHours(0, 0, 0, 0);
-    return now;
-  }
-  
-  // "N days/weeks/months ago" pattern
-  const agoMatch = lower.match(/^(\d+)\s*(day|days|week|weeks|month|months)\s*ago$/);
-  if (agoMatch) {
-    const n = parseInt(agoMatch[1], 10);
-    const unit = agoMatch[2];
-    if (unit.startsWith("day")) {
-      now.setDate(now.getDate() - n);
-    } else if (unit.startsWith("week")) {
-      now.setDate(now.getDate() - n * 7);
-    } else if (unit.startsWith("month")) {
-      now.setMonth(now.getMonth() - n);
-    }
-    now.setHours(0, 0, 0, 0);
-    return now;
-  }
-  
-  // "in N days/weeks" pattern
-  const inMatch = lower.match(/^in\s*(\d+)\s*(day|days|week|weeks|month|months)$/);
-  if (inMatch) {
-    const n = parseInt(inMatch[1], 10);
-    const unit = inMatch[2];
-    if (unit.startsWith("day")) {
-      now.setDate(now.getDate() + n);
-    } else if (unit.startsWith("week")) {
-      now.setDate(now.getDate() + n * 7);
-    } else if (unit.startsWith("month")) {
-      now.setMonth(now.getMonth() + n);
-    }
-    now.setHours(0, 0, 0, 0);
-    return now;
-  }
-  
-  // Try standard Date parsing (handles ISO 8601 and many other formats)
-  const parsed = new Date(dateStr);
-  return isNaN(parsed.getTime()) ? null : parsed;
 }
 
 /**
@@ -194,57 +109,6 @@ function generateIcsInvitation(eventData, method = "REQUEST") {
   return lines.join("\r\n");
 }
 
-/**
- * Normalize parameter names - accept common aliases
- */
-function normalizeCalendarParams(params) {
-  const aliases = {
-    calendar: ["calendarId", "calendar_id", "cal"],
-    title: ["summary", "name", "eventName", "event_name"],
-    start: ["startDate", "start_date", "startTime", "start_time", "from", "begin"],
-    end: ["endDate", "end_date", "endTime", "end_time", "to", "until"],
-    location: ["place", "where", "loc"],
-    description: ["desc", "details", "notes", "body", "content"],
-    organizer: ["host", "owner", "creator"],
-    attendees: ["participants", "invitees", "guests", "people"],
-    sendInvites: ["send_invites", "sendInvitations", "send_invitations", "notify"]
-  };
-  
-  const normalized = { ...params };
-  for (const [canonical, alternates] of Object.entries(aliases)) {
-    for (const alt of alternates) {
-      if (normalized[alt] !== undefined && normalized[canonical] === undefined) {
-        normalized[canonical] = normalized[alt];
-        delete normalized[alt];
-      }
-    }
-  }
-  return normalized;
-}
-
-/**
- * Fuzzy match a string against a list of candidates
- */
-function fuzzyMatchCalendar(input, candidates) {
-  if (!input || !candidates || candidates.length === 0) return null;
-  
-  const lower = input.toLowerCase();
-  
-  // Exact match first
-  const exact = candidates.find(c => c.name.toLowerCase() === lower || c.id === input);
-  if (exact) return exact;
-  
-  // Starts with
-  const startsWith = candidates.find(c => c.name.toLowerCase().startsWith(lower));
-  if (startsWith) return startsWith;
-  
-  // Contains
-  const contains = candidates.find(c => c.name.toLowerCase().includes(lower));
-  if (contains) return contains;
-  
-  return null;
-}
-
 // =============================================================================
 // Calendar API functions
 // =============================================================================
@@ -289,11 +153,14 @@ function findCalendar(calendarId, cal) {
     }
   }
   
-  // Try fuzzy match by name
-  const calendarList = calendars.map(c => ({ id: c.id, name: c.name, calendar: c }));
-  const match = fuzzyMatchCalendar(calendarId, calendarList);
+  // Try fuzzy match by name (Utils.fuzzyMatch is the interim replacement for
+  // the deleted local matcher; Task 3.3 replaces it with the exact resolver).
+  const match = Utils.fuzzyMatch(calendarId, calendars.map(c => c.name));
   if (match) {
-    return { calendar: match.calendar };
+    const calendar = calendars.find(c => c.name === match);
+    if (calendar) {
+      return { calendar };
+    }
   }
   
   // Not found - provide helpful error
@@ -392,24 +259,18 @@ async function listEvents(params, cal, Ci) {
   }
 
   // Normalize parameter names
-  const normalized = normalizeCalendarParams(params);
+  const normalized = Utils.normalizeParams(params, Utils.ALIASES.calendar);
   const { calendar: calendarId, start, end } = normalized;
 
   // Parse date range with flexible parsing
-  const startDate = start ? parseFlexibleDate(start) : new Date();
-  const endDate = end ? parseFlexibleDate(end) : new Date(startDate.getTime() + 30 * 24 * 60 * 60 * 1000); // Default 30 days
+  const startDate = start ? Utils.parseDate(start) : new Date();
+  const endDate = end ? Utils.parseDate(end) : new Date(startDate.getTime() + 30 * 24 * 60 * 60 * 1000); // Default 30 days
 
   if (start && !startDate) {
-    return Utils.fail("invalid_date", `Invalid start date: "${start}"`, 400, [
-      "Use ISO format: 2024-01-15 or 2024-01-15T10:30:00",
-      "Or relative: today, tomorrow, yesterday, next week, 2 days ago"
-    ]);
+    return Utils.fail("invalid_date", `Could not parse date: "${start}"`, 400, Utils.DATE_SUGGESTIONS);
   }
   if (end && !endDate) {
-    return Utils.fail("invalid_date", `Invalid end date: "${end}"`, 400, [
-      "Use ISO format: 2024-01-15 or 2024-01-15T10:30:00",
-      "Or relative: today, tomorrow, in 2 weeks, next month"
-    ]);
+    return Utils.fail("invalid_date", `Could not parse date: "${end}"`, 400, Utils.DATE_SUGGESTIONS);
   }
 
   const rangeStart = cal.createDateTime();
@@ -474,7 +335,7 @@ async function upcomingEvents(params, cal, Ci) {
     ]);
   }
 
-  const normalized = normalizeCalendarParams(params);
+  const normalized = Utils.normalizeParams(params, Utils.ALIASES.calendar);
   const { calendar: calendarId } = normalized;
 
   const now = new Date();
@@ -543,7 +404,7 @@ async function createEvent(params, cal, Ci, Cc) {
   }
 
   // Normalize parameter names
-  const normalized = normalizeCalendarParams(params);
+  const normalized = Utils.normalizeParams(params, Utils.ALIASES.calendar);
   let { calendar: calendarId, title, start, end, location, description, organizer, attendees, sendInvites } = normalized;
   
   // Parse sendInvites as boolean
@@ -598,20 +459,14 @@ async function createEvent(params, cal, Ci, Cc) {
   }
 
   // Parse dates with flexible parsing
-  const startDate = parseFlexibleDate(start);
-  const endDate = parseFlexibleDate(end);
+  const startDate = Utils.parseDate(start);
+  const endDate = Utils.parseDate(end);
 
   if (!startDate) {
-    return Utils.fail("invalid_date", `Invalid start date: "${start}"`, 400, [
-      "Use ISO format: 2024-01-15T10:00:00",
-      "Or relative: tomorrow, next monday, in 2 days"
-    ]);
+    return Utils.fail("invalid_date", `Could not parse date: "${start}"`, 400, Utils.DATE_SUGGESTIONS);
   }
   if (!endDate) {
-    return Utils.fail("invalid_date", `Invalid end date: "${end}"`, 400, [
-      "Use ISO format: 2024-01-15T11:00:00",
-      "Or relative: tomorrow"
-    ]);
+    return Utils.fail("invalid_date", `Could not parse date: "${end}"`, 400, Utils.DATE_SUGGESTIONS);
   }
 
   // Validate end is after start
@@ -770,7 +625,7 @@ async function updateEvent(eventId, params, cal, Ci, Cc) {
   }
 
   // Normalize parameter names
-  const normalized = normalizeCalendarParams(params);
+  const normalized = Utils.normalizeParams(params, Utils.ALIASES.calendar);
   const { calendar: calendarId, title, start, end, location, description, organizer, attendees } = normalized;
 
   if (!calendarId) {
@@ -811,23 +666,17 @@ async function updateEvent(eventId, params, cal, Ci, Cc) {
 
     if (title !== undefined) newEvent.title = title;
     if (start !== undefined) {
-      const startDate = parseFlexibleDate(start);
+      const startDate = Utils.parseDate(start);
       if (!startDate) {
-        return Utils.fail("invalid_date", `Invalid start date: "${start}"`, 400, [
-          "Use ISO format: 2024-01-15T10:00:00",
-          "Or relative: tomorrow, next monday"
-        ]);
+        return Utils.fail("invalid_date", `Could not parse date: "${start}"`, 400, Utils.DATE_SUGGESTIONS);
       }
       newEvent.startDate = cal.createDateTime();
       newEvent.startDate.nativeTime = startDate.getTime() * 1000;
     }
     if (end !== undefined) {
-      const endDate = parseFlexibleDate(end);
+      const endDate = Utils.parseDate(end);
       if (!endDate) {
-        return Utils.fail("invalid_date", `Invalid end date: "${end}"`, 400, [
-          "Use ISO format: 2024-01-15T11:00:00",
-          "Or relative: tomorrow"
-        ]);
+        return Utils.fail("invalid_date", `Could not parse date: "${end}"`, 400, Utils.DATE_SUGGESTIONS);
       }
       newEvent.endDate = cal.createDateTime();
       newEvent.endDate.nativeTime = endDate.getTime() * 1000;
@@ -940,7 +789,7 @@ async function deleteEvent(eventId, params, cal) {
   }
 
   // Normalize parameter names
-  const normalized = normalizeCalendarParams(params);
+  const normalized = Utils.normalizeParams(params, Utils.ALIASES.calendar);
   const { calendar: calendarId } = normalized;
 
   if (!calendarId) {

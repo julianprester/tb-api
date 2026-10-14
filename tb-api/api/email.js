@@ -123,9 +123,7 @@ async function searchMessages(params) {
     if (date) {
       queryInfo.fromDate = date;
     } else {
-      return Utils.fail("invalid_date", `Could not parse date: "${after}"`, 400, [
-        'Try formats like: "today", "yesterday", "2024-01-15", "2 days ago", "last week"'
-      ]);
+      return Utils.fail("invalid_date", `Could not parse date: "${after}"`, 400, Utils.DATE_SUGGESTIONS);
     }
   }
   if (before) {
@@ -133,9 +131,7 @@ async function searchMessages(params) {
     if (date) {
       queryInfo.toDate = date;
     } else {
-      return Utils.fail("invalid_date", `Could not parse date: "${before}"`, 400, [
-        'Try formats like: "today", "tomorrow", "2024-01-15", "in 3 days"'
-      ]);
+      return Utils.fail("invalid_date", `Could not parse date: "${before}"`, 400, Utils.DATE_SUGGESTIONS);
     }
   }
 

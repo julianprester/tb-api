@@ -19,7 +19,7 @@ async function handleRequest(request) {
         version: browser.runtime.getManifest().version,
         description: "REST API for Thunderbird email, calendar, and contacts. Designed for AI/LLM consumption with flexible inputs and helpful error messages.",
         tips: [
-          "Dates accept: ISO 8601, 'today', 'tomorrow', 'yesterday', '2 days ago', 'next week'",
+          `Dates accept: ${Utils.DATE_SUGGESTIONS.join(", ")}`,
           "Parameters have aliases: 'q'/'query'/'search', 'folder'/'mailbox', etc.",
           "Errors include 'suggestions' array with actionable fixes",
           "Calendar/addressbook can be specified by name (fuzzy matched) or ID"

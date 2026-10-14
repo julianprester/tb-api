@@ -129,7 +129,8 @@ test("email search still maps q -> text and start -> after", async () => {
 
   const byStart = await h.request("GET", "/messages", "start=2024-01-15");
   assert.equal(byStart.status, 200);
-  assert.equal(h.queries[1].fromDate.getTime(), new Date("2024-01-15").getTime());
+  // Date-only input means LOCAL midnight (decision D9, Task 2.5).
+  assert.equal(h.queries[1].fromDate.getTime(), new Date(2024, 0, 15).getTime());
 });
 
 test("normalizeParams applies the table for the endpoint's domain", () => {
