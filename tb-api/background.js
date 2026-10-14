@@ -11,7 +11,7 @@ async function handleRequest(request) {
   console.log(`[tb-api] ${method} ${path}`);
 
   try {
-    const params = { ...Utils.parseQueryString(queryString), ...(body ? JSON.parse(body) : {}) };
+    const params = Utils.parseRequestParams(queryString, body);
     // Root endpoint - LLM-friendly API description
     if (path === "/" && method === "GET") {
       return Utils.jsonResponse({
@@ -113,8 +113,8 @@ async function handleRequest(request) {
 
   } catch (e) {
     console.error("[tb-api] Error:", e);
-    const statusCode = e instanceof SyntaxError || e instanceof URIError ? 400 : 500;
-    return Utils.errorResponse(e.message, statusCode);
+    const statusCode = e.statusCode || (e instanceof SyntaxError || e instanceof URIError ? 400 : 500);
+    return Utils.errorResponse(e.message, statusCode, null, e.code);
   }
 }
 

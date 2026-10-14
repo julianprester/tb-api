@@ -2,17 +2,55 @@
 
 /**
  * Parse query string into object
+ *
+ * Splits on "&", splits each part at the first "=" (so values may contain
+ * "="), and treats "+" as a space in both keys and values. Malformed
+ * percent-encoding makes decodeURIComponent throw URIError, which the caller
+ * maps to HTTP 400.
  */
 function parseQueryString(qs) {
-  if (!qs) return {};
   const params = {};
+  if (!qs) return params;
   for (const part of qs.split("&")) {
-    const [key, value] = part.split("=");
-    if (key) {
-      params[decodeURIComponent(key)] = value ? decodeURIComponent(value) : "";
-    }
+    if (!part) continue;
+    const eq = part.indexOf("=");
+    const rawKey = eq < 0 ? part : part.slice(0, eq);
+    const rawValue = eq < 0 ? "" : part.slice(eq + 1);
+    const decode = s => decodeURIComponent(s.replace(/\+/g, " "));
+    params[decode(rawKey)] = decode(rawValue);
   }
   return params;
+}
+
+/**
+ * Error carrying a stable `code` and an HTTP `statusCode`, so request-level
+ * failures (malformed body, bad query) reach the route handler's catch with
+ * their intended status instead of a generic 500.
+ */
+class RequestError extends Error {
+  constructor(message, code, statusCode = 400) {
+    super(message);
+    this.name = "RequestError";
+    this.code = code;
+    this.statusCode = statusCode;
+  }
+}
+
+/**
+ * Parse a query string and an optional JSON body into one params object.
+ * Body params win over query params. A malformed JSON body throws SyntaxError;
+ * a JSON body that is not an object (null, array, scalar) throws RequestError
+ * with code "invalid_body".
+ */
+function parseRequestParams(queryString, body) {
+  let bodyParams = {};
+  if (body) {
+    bodyParams = JSON.parse(body);
+    if (bodyParams === null || typeof bodyParams !== "object" || Array.isArray(bodyParams)) {
+      throw new RequestError("Request body must be a JSON object", "invalid_body", 400);
+    }
+  }
+  return { ...parseQueryString(queryString), ...bodyParams };
 }
 
 /**
@@ -255,6 +293,8 @@ function didYouMean(input, candidates) {
 // Export for use in background script
 var Utils = {
   parseQueryString,
+  RequestError,
+  parseRequestParams,
   parseDate,
   normalizeParams,
   PARAM_ALIASES,

@@ -69,8 +69,13 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
     );
     const { HttpServer } = httpdScope;
 
-    // Import calendar module
+    // Import calendar module. utils.js is loaded into the same scope first so
+    // calendar.js can share the background's parameter parsing helpers.
     const calendarScope = {};
+    Services.scriptloader.loadSubScript(
+      context.extension.rootURI.resolve("api/utils.js"),
+      calendarScope
+    );
     Services.scriptloader.loadSubScript(
       context.extension.rootURI.resolve("api/calendar.js"),
       calendarScope
@@ -174,21 +179,6 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
     }
 
     /**
-     * Parse query string
-     */
-    function parseQueryString(qs) {
-      if (!qs) return {};
-      const params = {};
-      for (const part of qs.split("&")) {
-        const [key, value] = part.split("=");
-        if (key) {
-          params[decodeURIComponent(key)] = value ? decodeURIComponent(value) : "";
-        }
-      }
-      return params;
-    }
-
-    /**
      * Determine HTTP status code from error message
      */
     function getErrorStatus(errorMessage) {
@@ -228,8 +218,7 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
      * Handle calendar routes directly
      */
     async function handleCalendarRoute(requestId, method, path, queryString, body) {
-      const bodyObj = body ? JSON.parse(body) : {};
-      const params = { ...parseQueryString(queryString), ...bodyObj };
+      const params = calendarScope.Utils.parseRequestParams(queryString, body);
 
       try {
         // GET /calendars
