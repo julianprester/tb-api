@@ -334,7 +334,8 @@ test("HTTP refresh errors have correct statuses and machine-readable codes", asy
   assert.equal(offline.body.code, "thunderbird_offline");
   const missing = await h.request("POST", "/mailboxes/refresh", { headers: json, body: '{"mailbox":"no-such-folder"}' });
   assert.equal(missing.status, 404);
-  assert.equal(missing.body.code, "folder_not_found");
+  // Task 3.3: the shared resolver reports not_found (was folder_not_found).
+  assert.equal(missing.body.code, "not_found");
   const scope = await h.request("POST", "/mailboxes/refresh", { headers: json, body: "{}" });
   assert.equal(scope.status, 400);
   assert.equal(scope.body.code, "missing_mailbox");

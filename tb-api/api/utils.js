@@ -389,13 +389,17 @@ function jsonResponse(data, statusCode = 200) {
 
 /**
  * Format error response with helpful suggestions
+ *
+ * `extra` is merged into the JSON body last; used to carry machine-readable
+ * error payloads such as the conflicting targets of `ambiguous_target`.
  */
-function errorResponse(message, statusCode = 400, suggestions = null, code = null) {
+function errorResponse(message, statusCode = 400, suggestions = null, code = null, extra = null) {
   const response = { error: message };
   if (suggestions) {
     response.suggestions = suggestions;
   }
   if (code) response.code = code;
+  if (extra) Object.assign(response, extra);
   return {
     statusCode,
     body: JSON.stringify(response)
@@ -407,7 +411,10 @@ function errorResponse(message, statusCode = 400, suggestions = null, code = nul
  */
 function resultResponse(result, errorStatusCode = 400) {
   if (result.error) {
-    return errorResponse(result.error, result.statusCode || errorStatusCode, result.suggestions, result.code);
+    // 409 ambiguous_target lists the conflicting targets so the client can
+    // retry with one of their IDs; other error results carry no extra body.
+    const extra = result.matches ? { matches: result.matches } : null;
+    return errorResponse(result.error, result.statusCode || errorStatusCode, result.suggestions, result.code, extra);
   }
   return jsonResponse(result);
 }
@@ -438,6 +445,125 @@ function didYouMean(input, candidates) {
   return null;
 }
 
+/**
+ * Resolve a user-supplied target against caller-supplied candidates (D4).
+ *
+ * Pure by construction: each domain loads its own candidates (folders.query,
+ * identities.list, addressBooks.list, cal.manager) and passes them in, so the
+ * same resolver runs in the background and calendar scopes without touching
+ * messenger/cal globals.
+ *
+ * Candidates are `{ id, name, role?, account? }`:
+ * - mailboxes: `role` is the folder's special-use role, `account` the account ID.
+ * - identities: `name` is the identity's EMAIL address. Identity writes match
+ *   the ID or the exact email only (D4), so mapping the email onto `name`
+ *   reuses the exact-name rule and never matches the display name.
+ *
+ * Matching order (first hit wins):
+ * 1. exact ID (string comparison, untrimmed: folder IDs may contain spaces)
+ * 2. exact role, case-insensitive (mailboxes only)
+ * 3. exact name, case-insensitive (exact email for identities)
+ * 4. read mode only: fuzzy chain (prefix, contains, similarity) -> "fuzzy"
+ * 5. nothing -> 404 not_found with didYouMean + the caller's hints
+ *
+ * Several matches: read mode picks the first candidate (the caller reports
+ * the choice, e.g. searchMessages's `resolved_mailbox`); write mode refuses
+ * with 409 ambiguous_target carrying `matches: [{ id, name, account }]`.
+ *
+ * `hints` are optional extra suggestion strings supplied by the caller (e.g.
+ * "Use GET /mailboxes to see all available folders") so this shared helper
+ * does not need to know route names.
+ *
+ * Returns `{ id, name, matched_by: "id"|"role"|"name"|"fuzzy" }` or a
+ * `Utils.fail` result (`invalid_target` 400, `not_found` 404,
+ * `ambiguous_target` 409).
+ */
+function resolveTarget(kind, input, { mode = "read", candidates = [], hints = [] } = {}) {
+  const labels = { mailbox: "Mailbox", calendar: "Calendar", addressbook: "Address book", identity: "Identity" };
+  const plurals = { mailbox: "mailboxes", calendar: "calendars", addressbook: "address books", identity: "identities" };
+  const label = labels[kind] || "Target";
+  const plural = plurals[kind] || "targets";
+
+  const list = (Array.isArray(candidates) ? candidates : [])
+    .filter(candidate => candidate && candidate.id !== undefined && candidate.id !== null);
+  const names = list.map(candidate => candidate.name).filter(name => typeof name === "string" && name);
+  const roles = kind === "mailbox"
+    ? [...new Set(list.map(candidate => candidate.role).filter(role => typeof role === "string" && role))]
+    : [];
+
+  if (typeof input !== "string" || !input.trim()) {
+    return fail("invalid_target", `${label} must be a non-empty ID, name, or role`, 400);
+  }
+
+  const target = (candidate, matched_by) => ({ id: candidate.id, name: candidate.name, matched_by });
+
+  const ambiguous = (matched, matchedBy) => {
+    const matches = matched.map(candidate => ({ id: candidate.id, name: candidate.name, account: candidate.account ?? null }));
+    const described = matches.map(m => m.account ? `${m.name} (${m.id}, account ${m.account})` : `${m.name} (${m.id})`);
+    const result = fail(
+      "ambiguous_target",
+      `Multiple ${plural} match "${input}"; specify one by ID`,
+      409,
+      [`Exact ${matchedBy} matches: ${described.join(", ")}`, ...hints].filter(Boolean)
+    );
+    result.matches = matches;
+    return result;
+  };
+
+  // One hit -> that target. Several hits -> first in read mode, 409 in write mode.
+  const settle = (matched, matchedBy) => {
+    if (matched.length === 0) return null;
+    if (matched.length > 1 && mode === "write") return ambiguous(matched, matchedBy);
+    return target(matched[0], matchedBy);
+  };
+
+  // 1. Exact ID. Compared untrimmed so folder IDs keep their exact spelling.
+  const byId = settle(list.filter(candidate => String(candidate.id) === input), "id");
+  if (byId) return byId;
+
+  const needle = input.trim().toLowerCase();
+
+  // 2. Exact role (mailboxes only).
+  const byRole = settle(
+    list.filter(candidate => typeof candidate.role === "string" && candidate.role.toLowerCase() === needle),
+    "role"
+  );
+  if (byRole) return byRole;
+
+  // 3. Exact name (the exact email for identities).
+  const byName = settle(
+    list.filter(candidate => typeof candidate.name === "string" && candidate.name.toLowerCase() === needle),
+    "name"
+  );
+  if (byName) return byName;
+
+  // 4. Fuzzy chain, read mode only: a typo must never choose a write target.
+  if (mode !== "write") {
+    const roleMatch = roles.length > 0 ? fuzzyMatch(needle, roles) : null;
+    if (roleMatch) {
+      const candidate = list.find(item => item.role === roleMatch);
+      if (candidate) return target(candidate, "fuzzy");
+    }
+    const nameMatch = fuzzyMatch(needle, names);
+    if (nameMatch) {
+      const candidate = list.find(item => item.name === nameMatch);
+      if (candidate) return target(candidate, "fuzzy");
+    }
+  }
+
+  // 5. Nothing matched. Keep didYouMean, then list what is available.
+  return fail(
+    "not_found",
+    `${label} not found: "${input}"`,
+    404,
+    [
+      didYouMean(input.trim(), [...roles, ...names]),
+      `Available ${plural}: ${names.join(", ") || "none"}`,
+      ...hints
+    ].filter(Boolean)
+  );
+}
+
 // Export for use in background script
 var Utils = {
   parseQueryString,
@@ -448,6 +574,7 @@ var Utils = {
   normalizeParams,
   ALIASES,
   fuzzyMatch,
+  resolveTarget,
   jsonResponse,
   errorResponse,
   fail,

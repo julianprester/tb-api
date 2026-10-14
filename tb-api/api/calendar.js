@@ -138,40 +138,33 @@ function listCalendars(cal) {
 }
 
 /**
- * Find calendar by ID or name (with fuzzy matching)
- * Returns { calendar, error, code, statusCode, suggestions } object
+ * Find a calendar by ID or name through the shared resolver (Task 3.3).
+ *
+ * `mode: "read"` (listing) keeps fuzzy matching; `mode: "write"`
+ * (create/update/delete) requires an exact ID or name and answers ambiguous
+ * references with 409 ambiguous_target.
+ *
+ * Returns `{ calendar }` on success or `{ error }` (a Utils.fail result) on
+ * failure. The error result is returned unchanged so fields such as
+ * `matches` survive into the HTTP response.
  */
-function findCalendar(calendarId, cal) {
-  if (!cal) return { calendar: null, ...Utils.fail("calendar_unavailable", "Calendar not available", 503) };
-  
+function findCalendar(calendarId, cal, mode = "read") {
+  if (!cal) {
+    return { error: Utils.fail("calendar_unavailable", "Calendar not available", 503, [
+      "Ensure Thunderbird's calendar component is enabled"
+    ]) };
+  }
+
   const calendars = cal.manager.getCalendars();
-  
-  // Try exact ID match first
-  for (const calendar of calendars) {
-    if (calendar.id === calendarId) {
-      return { calendar };
-    }
-  }
-  
-  // Try fuzzy match by name (Utils.fuzzyMatch is the interim replacement for
-  // the deleted local matcher; Task 3.3 replaces it with the exact resolver).
-  const match = Utils.fuzzyMatch(calendarId, calendars.map(c => c.name));
-  if (match) {
-    const calendar = calendars.find(c => c.name === match);
-    if (calendar) {
-      return { calendar };
-    }
-  }
-  
-  // Not found - provide helpful error
-  const calendarNames = calendars.map(c => c.name);
-  return {
-    calendar: null,
-    ...Utils.fail("not_found", `Calendar not found: "${calendarId}"`, 404, [
-      `Available calendars: ${calendarNames.join(", ") || "none"}`,
-      "Use GET /calendars to see all available calendars with their IDs"
-    ])
-  };
+  const resolved = Utils.resolveTarget("calendar", calendarId, {
+    mode,
+    candidates: calendars.map(calendar => ({ id: calendar.id, name: calendar.name })),
+    hints: ["Use GET /calendars to see all available calendars with their IDs"]
+  });
+  if (resolved.error) return { error: resolved };
+
+  const calendar = calendars.find(candidate => candidate.id === resolved.id);
+  return { calendar };
 }
 
 /**
@@ -281,13 +274,11 @@ async function listEvents(params, cal, Ci) {
 
   const results = [];
 
-  // Get calendars to search
+  // Get calendars to search. Listing is a read: fuzzy names are allowed.
   let calendars;
   if (calendarId) {
     const found = findCalendar(calendarId, cal);
-    if (!found.calendar) {
-      return Utils.fail(found.code, found.error, found.statusCode, found.suggestions);
-    }
+    if (found.error) return found.error;
     calendars = [found.calendar];
   } else {
     calendars = cal.manager.getCalendars();
@@ -347,12 +338,11 @@ async function upcomingEvents(params, cal, Ci) {
   const rangeEnd = cal.createDateTime();
   rangeEnd.nativeTime = endOfDay.getTime() * 1000;
 
+  // Listing upcoming events is a read, so fuzzy calendar names are allowed.
   let calendars;
   if (calendarId) {
     const found = findCalendar(calendarId, cal);
-    if (!found.calendar) {
-      return Utils.fail(found.code, found.error, found.statusCode, found.suggestions);
-    }
+    if (found.error) return found.error;
     calendars = [found.calendar];
   } else {
     calendars = cal.manager.getCalendars();
@@ -448,10 +438,9 @@ async function createEvent(params, cal, Ci, Cc) {
     }
   }
 
-  const found = findCalendar(calendarId, cal);
-  if (!found.calendar) {
-    return Utils.fail(found.code, found.error, found.statusCode, found.suggestions);
-  }
+  // Creating an event is a write: the calendar must resolve exactly.
+  const found = findCalendar(calendarId, cal, "write");
+  if (found.error) return found.error;
   if (found.calendar.readOnly) {
     return Utils.fail("read_only", `Calendar "${found.calendar.name}" is read-only`, 403, [
       `Writable calendars: ${writableCalendars.map(c => c.name).join(", ") || "none"}`
@@ -642,10 +631,9 @@ async function updateEvent(eventId, params, cal, Ci, Cc) {
     );
   }
 
-  const found = findCalendar(calendarId, cal);
-  if (!found.calendar) {
-    return Utils.fail(found.code, found.error, found.statusCode, found.suggestions);
-  }
+  // Updating an event is a write: the calendar must resolve exactly.
+  const found = findCalendar(calendarId, cal, "write");
+  if (found.error) return found.error;
   if (found.calendar.readOnly) {
     const writableCalendars = cal.manager.getCalendars().filter(c => !c.readOnly);
     return Utils.fail("read_only", `Calendar "${found.calendar.name}" is read-only`, 403, [
@@ -779,7 +767,7 @@ async function updateEvent(eventId, params, cal, Ci, Cc) {
 
 /**
  * Delete an event
- * Accepts calendar by ID or name with fuzzy matching
+ * Accepts calendar by ID or exact name (deleting is a write, so no fuzzy)
  */
 async function deleteEvent(eventId, params, cal) {
   if (!cal) {
@@ -805,10 +793,9 @@ async function deleteEvent(eventId, params, cal) {
     );
   }
 
-  const found = findCalendar(calendarId, cal);
-  if (!found.calendar) {
-    return Utils.fail(found.code, found.error, found.statusCode, found.suggestions);
-  }
+  // Deleting an event is a write: the calendar must resolve exactly.
+  const found = findCalendar(calendarId, cal, "write");
+  if (found.error) return found.error;
   if (found.calendar.readOnly) {
     const writableCalendars = cal.manager.getCalendars().filter(c => !c.readOnly);
     return Utils.fail("read_only", `Calendar "${found.calendar.name}" is read-only`, 403, [

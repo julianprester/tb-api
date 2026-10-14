@@ -28,39 +28,28 @@ async function listAddressBooks() {
 }
 
 /**
- * Resolve address book with helpful suggestions on failure
+ * Resolve an address book through the shared resolver.
+ *
+ * `mode: "read"` (searchContacts) keeps fuzzy matching; `mode: "write"`
+ * (createContact) requires an exact ID or name and answers ambiguous
+ * references with 409 ambiguous_target. The resolved book's readOnly flag is
+ * carried over for the write path's 403 check.
  */
-async function resolveAddressBookWithSuggestions(addressbook) {
+async function resolveAddressBook(addressbook, mode) {
   const books = addressBookCache || (await messenger.addressBooks.list());
-  
+
   // Update cache if needed
   if (!addressBookCache) addressBookCache = books;
-  
-  const bookNames = books.map(b => b.name);
-  const lower = addressbook.toLowerCase().trim();
-  
-  // Try exact ID match
-  const byId = books.find(b => b.id === addressbook);
-  if (byId) return { id: byId.id, name: byId.name, readOnly: byId.readOnly };
-  
-  // Try exact name match (case-insensitive)
-  const byName = books.find(b => b.name.toLowerCase() === lower);
-  if (byName) return { id: byName.id, name: byName.name, readOnly: byName.readOnly };
-  
-  // Try fuzzy match
-  const fuzzyName = Utils.fuzzyMatch(addressbook, bookNames);
-  if (fuzzyName) {
-    const fuzzyBook = books.find(b => b.name === fuzzyName);
-    if (fuzzyBook) return { id: fuzzyBook.id, name: fuzzyBook.name, readOnly: fuzzyBook.readOnly };
-  }
-  
-  // Not found - provide helpful suggestions
-  const suggestion = Utils.didYouMean(addressbook, bookNames);
-  return Utils.fail("not_found", `Address book not found: "${addressbook}"`, 404, [
-    suggestion,
-    `Available address books: ${bookNames.join(", ")}`,
-    "Use GET /addressbooks to see all available address books"
-  ].filter(Boolean));
+
+  const resolved = Utils.resolveTarget("addressbook", addressbook, {
+    mode,
+    candidates: books.map(book => ({ id: book.id, name: book.name })),
+    hints: ["Use GET /addressbooks to see all available address books"]
+  });
+  if (resolved.error) return resolved;
+
+  const book = books.find(candidate => candidate.id === resolved.id);
+  return { ...resolved, readOnly: !!(book && book.readOnly) };
 }
 
 /**
@@ -77,7 +66,7 @@ async function searchContacts(params) {
 
   // Get contacts from specific address book or all
   if (addressbook) {
-    const resolved = await resolveAddressBookWithSuggestions(addressbook);
+    const resolved = await resolveAddressBook(addressbook, "read");
     if (resolved.error) return resolved;
     contacts = await messenger.contacts.list(resolved.id);
   } else {
@@ -148,8 +137,8 @@ async function createContact(params) {
     }
     addressbook = writableBooks[0].id;
   } else {
-    // Resolve provided address book
-    const resolved = await resolveAddressBookWithSuggestions(addressbook);
+    // Resolve provided address book (write: exact ID/name only)
+    const resolved = await resolveAddressBook(addressbook, "write");
     if (resolved.error) return resolved;
     
     if (resolved.readOnly) {

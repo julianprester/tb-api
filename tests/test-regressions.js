@@ -2,12 +2,11 @@
 
 // Regression tests for the twelve bugs reproduced during the review (plan 0.2).
 // Each case is added by the task that fixes it; this file was created by Task
-// 2.1. The 2.1/2.4/2.5/3.1 cases are present below; the remaining cases, with
-// their owning task:
+// 2.1. The 2.1/2.4/2.5/3.1/3.3 cases are present below; the remaining cases,
+// with their owning task:
 //
 //   3.2  PATCH move_to + add_flags applies both; all moves failing -> not
 //        success; flags: ["unread"] marks unread
-//   3.3  move_to "Archive 2023" with only "Archive 2022" -> 404, nothing moved
 //   3.4  unread=yes -> 400 invalid_filter
 //   5.2  GET /events?start=garbage -> 400
 
@@ -92,6 +91,29 @@ test("3.1: GET /messages/%3Cid%3E and PATCH ids:[\"<id>\"] find the message", as
   assert.equal(h.updates[0].id, 1);
   assert.equal(h.updates[0].properties.read, true);
   assert.equal(h.messages[0].read, true);
+});
+
+test("3.3: move_to \"Archive 2023\" with only \"Archive 2022\" -> 404, nothing moved", async () => {
+  const inbox = { id: "account1:/Inbox", name: "Inbox", role: "inbox" };
+  const moved = [];
+  const h = backgroundHarness({
+    folders: [inbox, { id: "account1:/Archive 2022", name: "Archive 2022" }],
+    messages: [{ id: 1, headerMessageId: "regression@example.test", folder: inbox }],
+    messenger: {
+      messages: {
+        async move(ids, folderId) { moved.push({ ids, folderId }); }
+      }
+    }
+  });
+
+  const patch = await h.request("PATCH", "/messages", "", JSON.stringify({
+    ids: [1],
+    move_to: "Archive 2023"
+  }));
+  assert.equal(patch.status, 404);
+  assert.equal(patch.body.code, "not_found");
+  assert.equal(moved.length, 0, "a fuzzy destination must never move mail");
+  assert.equal(h.messages[0].folder.id, "account1:/Inbox");
 });
 
 test("Malformed JSON / bad % on /events → 400 (no hang, no pending leak)", async t => {

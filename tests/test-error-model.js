@@ -32,8 +32,10 @@ test("Utils.fail builds { error, code, statusCode, suggestions? }", async t => {
 test("email errors carry the right statusCode and code", async t => {
   const h = experimentHarness({ t });
 
+  // Task 3.3: unresolved targets use the shared not_found code (the resolver
+  // replaced the mailbox-specific folder_not_found).
   const missingFolder = await h.Email.searchMessages({ mailbox: "does-not-exist" });
-  assert.equal(missingFolder.code, "folder_not_found");
+  assert.equal(missingFolder.code, "not_found");
   assert.equal(missingFolder.statusCode, 404);
   assert.match(missingFolder.error, /Mailbox not found/);
 

@@ -55,7 +55,11 @@ async function refreshMailbox(params) {
   }
   const resolved = await resolveMailboxWithSuggestions(normalized.mailbox);
   if (resolved.error) return resolved;
-  return refresh_folder(resolved.id, { timeoutMs: normalized.timeoutMs });
+  const result = await refresh_folder(resolved.id, { timeoutMs: normalized.timeoutMs });
+  if (result.error) return result;
+  // Read-mode resolution may have picked a fuzzy target; report what was used
+  // so a typo cannot silently refresh an unexpected folder.
+  return { ...result, resolved_mailbox: resolved };
 }
 
 /**
@@ -135,10 +139,13 @@ async function searchMessages(params) {
     }
   }
 
-  // Resolve mailbox with helpful error
+  // Resolve mailbox with helpful error. Read mode keeps fuzzy matching but
+  // reports the chosen folder as `resolved_mailbox` in the response.
+  let resolvedMailbox = null;
   if (mailbox) {
     const resolved = await resolveMailboxWithSuggestions(mailbox);
     if (resolved.error) return resolved;
+    resolvedMailbox = resolved;
     queryInfo.folderId = resolved.id;
   }
 
@@ -166,6 +173,7 @@ async function searchMessages(params) {
       total: 0,
       has_more: false,
       hints: hints.length > 0 ? hints : ["No messages match your search criteria"],
+      ...(resolvedMailbox ? { resolved_mailbox: resolvedMailbox } : {}),
       ...(refreshResult ? { refresh: refreshResult } : {})
     };
   }
@@ -212,6 +220,7 @@ async function searchMessages(params) {
     messages: formatted,
     total: formatted.length,
     has_more: hasMore,
+    ...(resolvedMailbox ? { resolved_mailbox: resolvedMailbox } : {}),
     ...(refreshResult ? { refresh: refreshResult } : {})
   };
 }
@@ -388,24 +397,17 @@ async function composeMessage(params) {
   let selectedIdentity = null;
 
   if (identity) {
-    // Try to match by email or ID
-    const match = identities.find(id =>
-      id.email.toLowerCase() === identity.toLowerCase() || 
-      id.id === identity ||
-      id.name.toLowerCase().includes(identity.toLowerCase())
-    );
-    if (match) {
-      identityId = match.id;
-      selectedIdentity = match.email;
-    } else {
-      // Provide helpful suggestions
-      const availableIdentities = identities.map(id => id.email);
-      const suggestion = Utils.didYouMean(identity, availableIdentities);
-      return Utils.fail("not_found", `Identity not found: "${identity}"`, 404, [
-        suggestion || `Available identities: ${availableIdentities.join(", ")}`,
-        "You can omit the identity field to use the default"
-      ]);
-    }
+    // D4: choosing a sender identity is a write. Match the identity ID or the
+    // exact email only; the display name is not a write target. The resolver's
+    // "identity" kind uses the email as the matchable name.
+    const resolved = Utils.resolveTarget("identity", identity, {
+      mode: "write",
+      candidates: identities.map(id => ({ id: id.id, name: id.email })),
+      hints: ["You can omit the identity field to use the default"]
+    });
+    if (resolved.error) return resolved;
+    identityId = resolved.id;
+    selectedIdentity = resolved.name;
   }
   
   // Auto-select first identity if none specified
@@ -561,9 +563,10 @@ async function updateMessages(params) {
 
   let count = 0;
 
-  // Handle move
+  // Handle move. Moving mail is a write, so the destination must resolve
+  // exactly (ID, role, or case-insensitive name; never fuzzy).
   if (move_to) {
-    const resolved = await resolveMailboxWithSuggestions(move_to);
+    const resolved = await resolveMailboxWithSuggestions(move_to, "write");
     if (resolved.error) return resolved;
     
     for (const msgId of messageIds) {
@@ -707,57 +710,58 @@ function getFlags(msg) {
 }
 
 /**
- * Resolve mailbox with helpful suggestions on failure
+ * Load every folder as a resolver candidate: ID, name, special-use role and
+ * account ID. `folders.query({ accountId })` is the same source listMailboxes
+ * uses, so names and roles resolve across all accounts.
  */
-async function resolveMailboxWithSuggestions(mailbox) {
+async function loadMailboxCandidates() {
+  const accounts = await messenger.accounts.list();
+  const candidates = [];
+  for (const account of accounts) {
+    const folders = await messenger.folders.query({ accountId: account.id });
+    for (const folder of folders) {
+      candidates.push({
+        id: folder.id,
+        name: folder.name,
+        role: folder.specialUse?.[0] || null,
+        account: account.id
+      });
+    }
+  }
+  return candidates;
+}
+
+/**
+ * Resolve a mailbox reference through the shared resolver.
+ *
+ * `mode: "read"` keeps the fuzzy chain and picks the first of several exact
+ * matches (reported by the caller); `mode: "write"` requires an exact ID,
+ * role, or name and answers ambiguous references with 409 ambiguous_target.
+ */
+async function resolveMailboxWithSuggestions(mailbox, mode = "read") {
   if (typeof mailbox !== "string" || !mailbox.trim()) {
     return Utils.fail("invalid_mailbox", "mailbox must be a non-empty folder ID, name, or role", 400);
   }
 
-  // Exact IDs take precedence over role/name guesses, especially across accounts.
+  // Exact IDs (which may contain spaces/Unicode) resolve in one folders.get()
+  // call, without listing every folder of every account. This is the same
+  // precedence the resolver applies first, just cheaper; everything else goes
+  // through the shared matcher.
   try {
     const folder = await messenger.folders.get(mailbox);
-    if (folder) return { id: folder.id, name: folder.name };
+    if (folder && folder.id === mailbox) {
+      return { id: folder.id, name: folder.name, matched_by: "id" };
+    }
   } catch (e) {}
 
-  const normalized = mailbox.toLowerCase().trim();
-  const validRoles = ["archives", "drafts", "inbox", "junk", "outbox", "sent", "templates", "trash"];
-
-  // Try as role (case-insensitive)
-  const roleMatch = Utils.fuzzyMatch(normalized, validRoles);
-  if (roleMatch) {
-    const byRole = await messenger.folders.query({ specialUse: [roleMatch] });
-    if (byRole.length > 0) return { id: byRole[0].id, name: byRole[0].name };
-  }
-
-  // Get all folders for matching
-  const accounts = await messenger.accounts.list();
-  const allFolders = [];
-  for (const account of accounts) {
-    const folders = await messenger.folders.query({ accountId: account.id });
-    allFolders.push(...folders);
-  }
-  
-  const folderNames = allFolders.map(f => f.name);
-
-  // Try exact name match (case-insensitive)
-  const exactMatch = allFolders.find(f => f.name.toLowerCase() === normalized);
-  if (exactMatch) return { id: exactMatch.id, name: exactMatch.name };
-
-  // Try fuzzy match on name
-  const fuzzyName = Utils.fuzzyMatch(mailbox, folderNames);
-  if (fuzzyName) {
-    const fuzzyFolder = allFolders.find(f => f.name === fuzzyName);
-    if (fuzzyFolder) return { id: fuzzyFolder.id, name: fuzzyFolder.name };
-  }
-
-  // Not found - provide helpful suggestions
-  const suggestion = Utils.didYouMean(mailbox, [...validRoles, ...folderNames]);
-  return Utils.fail("folder_not_found", `Mailbox not found: "${mailbox}"`, 404, [
-    suggestion,
-    `Valid roles: ${validRoles.join(", ")}`,
-    `Use GET /mailboxes to see all available folders`
-  ].filter(Boolean));
+  return Utils.resolveTarget("mailbox", mailbox, {
+    mode,
+    candidates: await loadMailboxCandidates(),
+    hints: [
+      "Valid roles: archives, drafts, inbox, junk, outbox, sent, templates, trash",
+      "Use GET /mailboxes to see all available folders"
+    ]
+  });
 }
 
 // Export
