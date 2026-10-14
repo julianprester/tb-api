@@ -93,22 +93,29 @@ async function searchMessages(params) {
       ["Specify the folder to refresh and search, e.g. mailbox=inbox&refresh=true"]
     );
   }
+  // A supplied boolean filter must be parseable. Silently dropping it would
+  // widen the search and return messages the caller asked to exclude.
   const flagFilters = {};
-  if (normalized.unread !== undefined) {
-    const v = parseBool(normalized.unread);
-    if (v !== undefined) flagFilters.unread = v;
+  for (const name of ["unread", "read", "flagged", "junk"]) {
+    if (normalized[name] === undefined) continue;
+    const value = parseBool(normalized[name]);
+    if (value === undefined) {
+      return Utils.fail("invalid_filter", `${name} must be true, false, 1 or 0`, 400, [
+        `Use ${name}=true or ${name}=false`
+      ]);
+    }
+    flagFilters[name] = value;
   }
-  if (normalized.read !== undefined) {
-    const v = parseBool(normalized.read);
-    if (v !== undefined) flagFilters.unread = !v;
-  }
-  if (normalized.flagged !== undefined) {
-    const v = parseBool(normalized.flagged);
-    if (v !== undefined) flagFilters.flagged = v;
-  }
-  if (normalized.junk !== undefined) {
-    const v = parseBool(normalized.junk);
-    if (v !== undefined) flagFilters.junk = v;
+  // read and unread describe the same flag (read=true means unread=false), so
+  // a contradictory pair must fail instead of letting the last one win.
+  if (flagFilters.read !== undefined) {
+    if (flagFilters.unread !== undefined && flagFilters.read === flagFilters.unread) {
+      return Utils.fail("invalid_filter", "read and unread filters contradict each other", 400, [
+        "read=true means unread=false; use only one of read or unread"
+      ]);
+    }
+    flagFilters.unread = !flagFilters.read;
+    delete flagFilters.read;
   }
 
   const queryInfo = {};

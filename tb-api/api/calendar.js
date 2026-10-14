@@ -397,8 +397,19 @@ async function createEvent(params, cal, Ci, Cc) {
   const normalized = Utils.normalizeParams(params, Utils.ALIASES.calendar);
   let { calendar: calendarId, title, start, end, location, description, organizer, attendees, sendInvites } = normalized;
   
-  // Parse sendInvites as boolean
-  sendInvites = sendInvites === true || sendInvites === "true" || sendInvites === 1 || sendInvites === "1";
+  // Parse sendInvites strictly: an unrecognized supplied value must not
+  // silently behave like false and skip the invitations. Absent stays false.
+  if (sendInvites === undefined) {
+    sendInvites = false;
+  } else if (sendInvites === true || sendInvites === "true" || sendInvites === 1 || sendInvites === "1") {
+    sendInvites = true;
+  } else if (sendInvites === false || sendInvites === "false" || sendInvites === 0 || sendInvites === "0") {
+    sendInvites = false;
+  } else {
+    return Utils.fail("invalid_filter", "sendInvites must be true, false, 1 or 0", 400, [
+      "Use sendInvites=true to send invitations, or omit it"
+    ]);
+  }
 
   // Validate required fields with helpful errors
   if (!title) {

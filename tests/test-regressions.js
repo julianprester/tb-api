@@ -2,10 +2,9 @@
 
 // Regression tests for the twelve bugs reproduced during the review (plan 0.2).
 // Each case is added by the task that fixes it; this file was created by Task
-// 2.1. The 2.1/2.4/2.5/3.1/3.2/3.3 cases are present below; the remaining
+// 2.1. The 2.1/2.4/2.5/3.1/3.2/3.3/3.4 cases are present below; the remaining
 // cases, with their owning task:
 //
-//   3.4  unread=yes -> 400 invalid_filter
 //   5.2  GET /events?start=garbage -> 400
 
 const test = require("node:test");
@@ -183,6 +182,16 @@ test("3.2: PATCH flags: [\"unread\"] marks the message unread", async () => {
   assert.equal(h.updates.length, 1);
   assert.equal(h.updates[0].properties.read, false);
   assert.equal(h.messages[0].read, false);
+});
+
+test("3.4: unread=yes -> 400 invalid_filter (no silently widened search)", async () => {
+  const h = backgroundHarness();
+
+  const result = await h.request("GET", "/messages", "unread=yes");
+  assert.equal(result.status, 400);
+  assert.equal(result.body.code, "invalid_filter");
+  assert.match(result.body.error, /unread/);
+  assert.equal(h.queries.length, 0, "an invalid filter must never be dropped into a query");
 });
 
 test("Malformed JSON / bad % on /events → 400 (no hang, no pending leak)", async t => {
