@@ -291,11 +291,51 @@ function toDate(value) {
   return null;
 }
 
-function fakeDateTime(nativeTime = 0, { isDate = false, timezone = null } = {}) {
+/**
+ * A CalTimezone fake, faithful to Appendix A.4: floating (and UTC) zones read
+ * nativeTime as UTC, other zones apply a fixed offset. Tests configure the
+ * shape, e.g. `{ tzid: "Test/Zone", offsetMinutes: 120 }`.
+ */
+function fakeTimezone(spec = {}) {
+  const isFloating = !!spec.isFloating;
+  const tzid = spec.tzid || spec.id || (isFloating ? "floating" : "UTC");
+  const offsetMinutes = Number.isFinite(spec.offsetMinutes) ? spec.offsetMinutes : 0;
   return {
+    id: spec.id || tzid,
+    tzid,
+    isFloating,
+    isUTC: spec.isUTC ?? (!isFloating && offsetMinutes === 0),
+    offsetMinutes
+  };
+}
+
+const FLOATING_TIMEZONE = fakeTimezone({ tzid: "floating", isFloating: true });
+
+/** Wall-clock fields of a nativeTime (µs) in the date-time's timezone. */
+function wallClock(nativeTime, isDate, timezone) {
+  const tz = timezone || FLOATING_TIMEZONE;
+  // All-day dates and floating times are read as UTC (utcOffset() is 0);
+  // zone-attached values are the exact instant shifted into the zone.
+  const offsetMs = isDate || tz.isFloating ? 0 : (tz.offsetMinutes || 0) * 60000;
+  const date = new Date(Math.round(nativeTime / 1000) + offsetMs);
+  return {
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth(),
+    day: date.getUTCDate(),
+    hour: date.getUTCHours(),
+    minute: date.getUTCMinutes(),
+    second: date.getUTCSeconds()
+  };
+}
+
+function fakeDateTime(nativeTime = 0, { isDate = false, timezone = null } = {}) {
+  const dateTime = {
     nativeTime,
     isDate,
-    timezone,
+    timezone: timezone || FLOATING_TIMEZONE,
+    getInTimezone(tz) {
+      return fakeDateTime(this.nativeTime, { isDate: this.isDate, timezone: tz });
+    },
     clone() {
       return fakeDateTime(this.nativeTime, { isDate: this.isDate, timezone: this.timezone });
     },
@@ -303,6 +343,34 @@ function fakeDateTime(nativeTime = 0, { isDate = false, timezone = null } = {}) 
       return new Date(this.nativeTime / 1000).toISOString();
     }
   };
+  // CalDateTime exposes wall-clock fields; month is 0-based.
+  for (const field of ["year", "month", "day", "hour", "minute", "second"]) {
+    Object.defineProperty(dateTime, field, {
+      get() { return wallClock(this.nativeTime, this.isDate, this.timezone)[field]; },
+      enumerable: true
+    });
+  }
+  return dateTime;
+}
+
+/**
+ * nativeTime (µs) for a calendar item. All-day dates are stored at UTC
+ * midnight of the calendar date (iCalendar DATE): a `YYYY-MM-DD` string is
+ * taken verbatim so the calendar date never depends on the host timezone;
+ * a Date is read in local time, like the UI would.
+ */
+function toNativeTime(value, allDay) {
+  if (value === undefined || value === null || value === "") return null;
+  if (allDay) {
+    if (typeof value === "string") {
+      const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (match) return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) * 1000;
+    }
+    const date = toDate(value);
+    return date ? Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) * 1000 : null;
+  }
+  const date = toDate(value);
+  return date ? date.getTime() * 1000 : null;
 }
 
 function toRid(value, allDay = false) {
@@ -396,13 +464,15 @@ class FakeRecurrenceInfo {
 }
 
 function createCalendarItem(spec = {}) {
-  const start = toDate(spec.start);
-  const end = toDate(spec.end);
+  const allDay = !!spec.allDay;
+  const timezone = spec.timezone ? fakeTimezone(spec.timezone) : null;
+  const startNative = toNativeTime(spec.start, allDay);
+  const endNative = toNativeTime(spec.end, allDay);
   const item = {
     id: spec.id || "",
     title: spec.title || "",
-    startDate: start ? fakeDateTime(start.getTime() * 1000, { isDate: !!spec.allDay }) : null,
-    endDate: end ? fakeDateTime(end.getTime() * 1000, { isDate: !!spec.allDay }) : null,
+    startDate: startNative === null ? null : fakeDateTime(startNative, { isDate: allDay, timezone }),
+    endDate: endNative === null ? null : fakeDateTime(endNative, { isDate: allDay, timezone }),
     recurrenceId: spec.recurrenceId ? toRid(spec.recurrenceId, spec.allDay) : null,
     parentItem: spec.parentItem || null,
     organizer: spec.organizer ? createCalendarAttendee(spec.organizer) : null,
@@ -449,13 +519,19 @@ function createCalendarAttendee(spec = {}) {
 
 function createFakeCal(options = {}) {
   let uuidCounter = 0;
-  const defaultTimezone = { id: "floating", isFloating: true, isUTC: false };
+  // The calendar's default timezone is configurable so tests can prove that
+  // events are reported in it instead of the host zone (Task 5.1).
+  const defaultTimezone = fakeTimezone(options.timezone || { tzid: "floating", isFloating: true });
+  const zones = options.timezones || {};
   const dtz = {
     defaultTimezone,
-    UTC: { id: "UTC", isUTC: true, isFloating: false },
-    floating: defaultTimezone,
+    UTC: fakeTimezone({ tzid: "UTC", isUTC: true }),
+    floating: FLOATING_TIMEZONE,
     getTimezone(id) {
-      return id === "UTC" ? dtz.UTC : { ...defaultTimezone, id: id || defaultTimezone.id };
+      if (!id) return defaultTimezone;
+      if (id === "UTC") return dtz.UTC;
+      if (id === "floating") return FLOATING_TIMEZONE;
+      return fakeTimezone({ ...(zones[id] || {}), tzid: id });
     },
     jsDateToDateTime(date, timezone) {
       return fakeDateTime(date.getTime() * 1000, { timezone: timezone || defaultTimezone });
@@ -528,8 +604,21 @@ function createFakeCal(options = {}) {
   return {
     manager: { getCalendars: () => calendars },
     dtz,
-    createDateTime(nativeTime = 0) {
-      return fakeDateTime(nativeTime, { timezone: defaultTimezone });
+    createDateTime(value = 0) {
+      // All-day create/update builds isDate values from "YYYYMMDD" (Task 5.1).
+      if (typeof value === "string") {
+        const dateOnly = value.trim().match(/^(\d{4})(\d{2})(\d{2})$/);
+        if (dateOnly) {
+          const [year, month, day] = dateOnly.slice(1).map(Number);
+          return fakeDateTime(Date.UTC(year, month - 1, day) * 1000, {
+            isDate: true,
+            timezone: FLOATING_TIMEZONE
+          });
+        }
+        const parsed = new Date(value);
+        return fakeDateTime(parsed.getTime() * 1000, { timezone: defaultTimezone });
+      }
+      return fakeDateTime(value, { timezone: defaultTimezone });
     },
     getUUID() {
       return `fake-uuid-${++uuidCounter}`;
@@ -645,7 +734,9 @@ function experimentHarness(options = {}) {
   const cal = options.cal || createFakeCal({
     calendars: options.calendars,
     items: options.items,
-    recurrenceInfo: options.recurrenceInfo
+    recurrenceInfo: options.recurrenceInfo,
+    timezone: options.timezone,
+    timezones: options.timezones
   });
   const Components = { isSuccessCode: code => (code >>> 31) === 0 };
 

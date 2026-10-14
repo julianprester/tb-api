@@ -21,6 +21,96 @@ function formatLocalDate(date) {
 }
 
 /**
+ * Format a CalDateTime for the API (Task 5.1).
+ *
+ * `nativeTime` is a UTC instant only for zone-attached date-times: floating
+ * and all-day values are read as UTC (`Ical.sys.mjs`'s utcOffset() returns 0),
+ * so `new Date(nativeTime / 1000)` interpreted them in the host timezone and
+ * shifted them by the host's UTC offset. Read the CalDateTime's own
+ * wall-clock fields instead:
+ * - all-day (`isDate`) dates are reported as `YYYY-MM-DD`; their `end` is the
+ *   EXCLUSIVE end date, as in iCalendar
+ * - floating values are reported as stored
+ * - zone-attached values are converted to the calendar's default timezone so
+ *   `start`/`end` can be interpreted
+ *
+ * `cal` is passed explicitly: calendar.js runs in the calendar scope where
+ * `cal` is a per-request argument, not a global.
+ */
+function formatCalDateTime(dt, cal) {
+  if (!dt) return null;
+  const pad = (n) => String(n).padStart(2, '0');
+  if (dt.isDate) {
+    // CalDateTime.month is 0-based.
+    return `${dt.year}-${pad(dt.month + 1)}-${pad(dt.day)}`;
+  }
+  const local = dt.timezone.isFloating ? dt : dt.getInTimezone(cal.dtz.defaultTimezone);
+  return `${local.year}-${pad(local.month + 1)}-${pad(local.day)}T${pad(local.hour)}:${pad(local.minute)}:${pad(local.second)}`;
+}
+
+/**
+ * Build a CalDateTime at an exact UTC instant, attached to the calendar's
+ * default timezone, so created/updated events are stored in the user's zone
+ * (as the Thunderbird UI does) instead of UTC (Task 5.1).
+ */
+function toCalDateTime(jsDate, cal) {
+  return cal.dtz.jsDateToDateTime(jsDate).getInTimezone(cal.dtz.defaultTimezone);
+}
+
+/**
+ * Normalize a date-only value to `YYYY-MM-DD`, or return null. Relative
+ * inputs ("tomorrow") and datetimes are refused: an all-day event has no time
+ * of day to fall back to.
+ */
+function parseDateOnly(value) {
+  if (typeof value !== "string") return null;
+  const raw = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  if (!Utils.parseDate(raw)) return null;
+  return raw;
+}
+
+/**
+ * Shift a `YYYY-MM-DD` date by whole days without going through the host
+ * timezone. Returns null when the result leaves the four-digit-year range.
+ */
+function shiftDateOnly(dateOnly, days) {
+  const [year, month, day] = dateOnly.split("-").map(Number);
+  const shifted = new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(shifted) ? shifted : null;
+}
+
+/** Build an all-day (`isDate`) CalDateTime from a `YYYY-MM-DD` date. */
+function dateOnlyCalDateTime(dateOnly, cal) {
+  return cal.createDateTime(dateOnly.replace(/-/g, ""));
+}
+
+/**
+ * Strictly parse a boolean parameter (decision D5): a supplied value that is
+ * neither a boolean nor 0/1/"true"/"false"/"0"/"1" is invalid.
+ */
+function parseStrictBoolean(value) {
+  if (value === true || value === 1 || value === "true" || value === "1") return true;
+  if (value === false || value === 0 || value === "false" || value === "0") return false;
+  return undefined;
+}
+
+/**
+ * Parse the `allDay` parameter. Returns `{ allDay }` (undefined when absent)
+ * or `{ error }` for a supplied value that is not a boolean.
+ */
+function parseAllDay(value) {
+  if (value === undefined) return { allDay: undefined };
+  const parsed = parseStrictBoolean(value);
+  if (parsed === undefined) {
+    return { error: Utils.fail("invalid_filter", "allDay must be true, false, 1 or 0", 400, [
+      "Use allDay=true for a date-only event, or omit it"
+    ]) };
+  }
+  return { allDay: parsed };
+}
+
+/**
  * Format date as iCalendar datetime (YYYYMMDDTHHMMSSZ)
  */
 function formatIcsDate(date) {
@@ -184,10 +274,7 @@ function attendeeToObject(attendee) {
 /**
  * Convert calendar item to event object
  */
-function itemToEvent(item, calendarId) {
-  const startMs = item.startDate?.nativeTime ? item.startDate.nativeTime / 1000 : null;
-  const endMs = item.endDate?.nativeTime ? item.endDate.nativeTime / 1000 : null;
-
+function itemToEvent(item, calendarId, cal) {
   // Get organizer
   let organizer = null;
   if (item.organizer) {
@@ -224,8 +311,11 @@ function itemToEvent(item, calendarId) {
     id: item.id,
     calendar: calendarId,
     title: item.title,
-    start: startMs ? formatLocalDate(new Date(startMs)) : null,
-    end: endMs ? formatLocalDate(new Date(endMs)) : null,
+    start: formatCalDateTime(item.startDate, cal),
+    // For all-day events this is the EXCLUSIVE end date (iCalendar semantics).
+    end: formatCalDateTime(item.endDate, cal),
+    allDay: item.startDate ? !!item.startDate.isDate : false,
+    timezone: cal.dtz.defaultTimezone.tzid,
     location: item.getProperty("LOCATION") || null,
     description: item.getProperty("DESCRIPTION") || null,
     organizer,
@@ -255,22 +345,27 @@ async function listEvents(params, cal, Ci) {
   const normalized = Utils.normalizeParams(params, Utils.ALIASES.calendar);
   const { calendar: calendarId, start, end } = normalized;
 
-  // Parse date range with flexible parsing
+  // Parse and validate the range before defaulting anything: an unparseable
+  // `start` used to reach `new Date(startDate.getTime() + ...)` with
+  // startDate === null and raised an unhandled TypeError (500) instead of a
+  // 400 (Task 5.2).
   const startDate = start ? Utils.parseDate(start) : new Date();
-  const endDate = end ? Utils.parseDate(end) : new Date(startDate.getTime() + 30 * 24 * 60 * 60 * 1000); // Default 30 days
-
   if (start && !startDate) {
     return Utils.fail("invalid_date", `Could not parse date: "${start}"`, 400, Utils.DATE_SUGGESTIONS);
   }
+
+  const endDate = end ? Utils.parseDate(end) : new Date(startDate.getTime() + 30 * 24 * 60 * 60 * 1000); // Default 30 days
   if (end && !endDate) {
     return Utils.fail("invalid_date", `Could not parse date: "${end}"`, 400, Utils.DATE_SUGGESTIONS);
   }
+  if (endDate <= startDate) {
+    return Utils.fail("invalid_date", "End date must be after start date", 400, [
+      `Start: ${startDate.toISOString()}, End: ${endDate.toISOString()}`
+    ]);
+  }
 
-  const rangeStart = cal.createDateTime();
-  rangeStart.nativeTime = startDate.getTime() * 1000;
-
-  const rangeEnd = cal.createDateTime();
-  rangeEnd.nativeTime = endDate.getTime() * 1000;
+  const rangeStart = toCalDateTime(startDate, cal);
+  const rangeEnd = toCalDateTime(endDate, cal);
 
   const results = [];
 
@@ -294,7 +389,7 @@ async function listEvents(params, cal, Ci) {
       );
 
       for (const item of items) {
-        results.push(itemToEvent(item, calendar.name));
+        results.push(itemToEvent(item, calendar.name, cal));
       }
     } catch (e) {
       // Skip calendars that fail
@@ -332,11 +427,8 @@ async function upcomingEvents(params, cal, Ci) {
   const now = new Date();
   const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
 
-  const rangeStart = cal.createDateTime();
-  rangeStart.nativeTime = now.getTime() * 1000;
-
-  const rangeEnd = cal.createDateTime();
-  rangeEnd.nativeTime = endOfDay.getTime() * 1000;
+  const rangeStart = toCalDateTime(now, cal);
+  const rangeEnd = toCalDateTime(endOfDay, cal);
 
   // Listing upcoming events is a read, so fuzzy calendar names are allowed.
   let calendars;
@@ -359,7 +451,7 @@ async function upcomingEvents(params, cal, Ci) {
         rangeEnd
       );
       for (const item of items) {
-        results.push(itemToEvent(item, calendar.name));
+        results.push(itemToEvent(item, calendar.name, cal));
       }
     } catch (e) {
       // Skip calendars that fail
@@ -396,7 +488,6 @@ async function createEvent(params, cal, Ci, Cc) {
   // Normalize parameter names
   const normalized = Utils.normalizeParams(params, Utils.ALIASES.calendar);
   let { calendar: calendarId, title, start, end, location, description, organizer, attendees, sendInvites } = normalized;
-  
   // Parse sendInvites strictly: an unrecognized supplied value must not
   // silently behave like false and skip the invitations. Absent stays false.
   if (sendInvites === undefined) {
@@ -411,6 +502,12 @@ async function createEvent(params, cal, Ci, Cc) {
     ]);
   }
 
+  // allDay is a boolean filter too (D5): an unrecognized supplied value must
+  // not silently behave like false (a timed event at midnight). Absent = false.
+  const allDayParam = parseAllDay(normalized.allDay);
+  if (allDayParam.error) return allDayParam.error;
+  const allDay = allDayParam.allDay === true;
+
   // Validate required fields with helpful errors
   if (!title) {
     return Utils.fail("invalid_parameter", "title is required", 400, [
@@ -418,12 +515,15 @@ async function createEvent(params, cal, Ci, Cc) {
     ]);
   }
   if (!start) {
-    return Utils.fail("invalid_parameter", "start date/time is required", 400, [
+    return Utils.fail("invalid_parameter", "start date/time is required", 400, allDay ? [
+      "Use a date-only start: 2024-01-15"
+    ] : [
       "Use ISO format: 2024-01-15T10:00:00",
       "Or relative: tomorrow, next monday"
     ]);
   }
-  if (!end) {
+  // An all-day event defaults to exactly one day, so `end` is optional.
+  if (!end && !allDay) {
     return Utils.fail("invalid_parameter", "end date/time is required", 400, [
       "Use ISO format: 2024-01-15T11:00:00",
       "Or relative: tomorrow"
@@ -458,22 +558,48 @@ async function createEvent(params, cal, Ci, Cc) {
     ]);
   }
 
-  // Parse dates with flexible parsing
-  const startDate = Utils.parseDate(start);
-  const endDate = Utils.parseDate(end);
+  // Parse dates with flexible parsing. All-day events take date-only values
+  // (YYYY-MM-DD) and are built as isDate CalDateTimes; their `end` is the
+  // exclusive end date, as in iCalendar, and defaults to start + 1 day.
+  let startDateTime;
+  let endDateTime;
 
-  if (!startDate) {
-    return Utils.fail("invalid_date", `Could not parse date: "${start}"`, 400, Utils.DATE_SUGGESTIONS);
-  }
-  if (!endDate) {
-    return Utils.fail("invalid_date", `Could not parse date: "${end}"`, 400, Utils.DATE_SUGGESTIONS);
-  }
+  if (allDay) {
+    const startDateOnly = parseDateOnly(start);
+    if (!startDateOnly) {
+      return Utils.fail("invalid_date", `Could not parse date: "${start}"`, 400, Utils.DATE_SUGGESTIONS);
+    }
+    const endDateOnly = end ? parseDateOnly(end) : shiftDateOnly(startDateOnly, 1);
+    if (!endDateOnly) {
+      return Utils.fail("invalid_date", `Could not parse date: "${end}"`, 400, Utils.DATE_SUGGESTIONS);
+    }
+    if (endDateOnly <= startDateOnly) {
+      return Utils.fail("invalid_date", "End date must be after start date", 400, [
+        `Start: ${startDateOnly}, End (exclusive): ${endDateOnly}`
+      ]);
+    }
+    startDateTime = dateOnlyCalDateTime(startDateOnly, cal);
+    endDateTime = dateOnlyCalDateTime(endDateOnly, cal);
+  } else {
+    const startDate = Utils.parseDate(start);
+    const endDate = Utils.parseDate(end);
 
-  // Validate end is after start
-  if (endDate <= startDate) {
-    return Utils.fail("invalid_date", "End date must be after start date", 400, [
-      `Start: ${startDate.toISOString()}, End: ${endDate.toISOString()}`
-    ]);
+    if (!startDate) {
+      return Utils.fail("invalid_date", `Could not parse date: "${start}"`, 400, Utils.DATE_SUGGESTIONS);
+    }
+    if (!endDate) {
+      return Utils.fail("invalid_date", `Could not parse date: "${end}"`, 400, Utils.DATE_SUGGESTIONS);
+    }
+
+    // Validate end is after start
+    if (endDate <= startDate) {
+      return Utils.fail("invalid_date", "End date must be after start date", 400, [
+        `Start: ${startDate.toISOString()}, End: ${endDate.toISOString()}`
+      ]);
+    }
+
+    startDateTime = toCalDateTime(startDate, cal);
+    endDateTime = toCalDateTime(endDate, cal);
   }
 
   try {
@@ -482,11 +608,8 @@ async function createEvent(params, cal, Ci, Cc) {
     event.id = cal.getUUID();
     event.title = title;
 
-    event.startDate = cal.createDateTime();
-    event.startDate.nativeTime = startDate.getTime() * 1000;
-
-    event.endDate = cal.createDateTime();
-    event.endDate.nativeTime = endDate.getTime() * 1000;
+    event.startDate = startDateTime;
+    event.endDate = endDateTime;
 
     if (location) event.setProperty("LOCATION", location);
     if (description) event.setProperty("DESCRIPTION", description);
@@ -555,8 +678,10 @@ async function createEvent(params, cal, Ci, Cc) {
       id: event.id,
       calendar: found.calendar.name,
       title: title,
-      start: formatLocalDate(startDate),
-      end: formatLocalDate(endDate)
+      // Report the stored values the same way GET /events does.
+      start: formatCalDateTime(event.startDate, cal),
+      end: formatCalDateTime(event.endDate, cal),
+      allDay
     };
 
     if (organizer) {
@@ -582,12 +707,13 @@ async function createEvent(params, cal, Ci, Cc) {
         if (!organizer) {
           response.warning = "sendInvites requested but no organizer specified. Invitations not sent.";
         } else {
-          // Generate ICS content for the invitation
+          // Generate ICS content for the invitation (invitation formatting for
+          // all-day events is Task 5.4's scope; here the stored instant is kept)
           const eventData = {
             id: event.id,
             title,
-            start: startDate.toISOString(),
-            end: endDate.toISOString(),
+            start: cal.dtz.dateTimeToJSDate(event.startDate).toISOString(),
+            end: cal.dtz.dateTimeToJSDate(event.endDate).toISOString(),
             location,
             description,
             organizer,
@@ -628,6 +754,11 @@ async function updateEvent(eventId, params, cal, Ci, Cc) {
   const normalized = Utils.normalizeParams(params, Utils.ALIASES.calendar);
   const { calendar: calendarId, title, start, end, location, description, organizer, attendees } = normalized;
 
+  // allDay is strict per D5; absent leaves the stored value untouched.
+  const allDayParam = parseAllDay(normalized.allDay);
+  if (allDayParam.error) return allDayParam.error;
+  const allDay = allDayParam.allDay === true;
+
   if (!calendarId) {
     // Try to help by listing calendars
     const calendars = cal.manager.getCalendars();
@@ -665,20 +796,43 @@ async function updateEvent(eventId, params, cal, Ci, Cc) {
 
     if (title !== undefined) newEvent.title = title;
     if (start !== undefined) {
-      const startDate = Utils.parseDate(start);
-      if (!startDate) {
-        return Utils.fail("invalid_date", `Could not parse date: "${start}"`, 400, Utils.DATE_SUGGESTIONS);
+      if (allDay) {
+        const startDateOnly = parseDateOnly(start);
+        if (!startDateOnly) {
+          return Utils.fail("invalid_date", `Could not parse date: "${start}"`, 400, Utils.DATE_SUGGESTIONS);
+        }
+        newEvent.startDate = dateOnlyCalDateTime(startDateOnly, cal);
+        // Keep the exclusive-end convention: moving an all-day start without
+        // an end covers exactly one day.
+        if (end === undefined) {
+          const nextDay = shiftDateOnly(startDateOnly, 1);
+          if (!nextDay) {
+            return Utils.fail("invalid_date", `Could not parse date: "${start}"`, 400, Utils.DATE_SUGGESTIONS);
+          }
+          newEvent.endDate = dateOnlyCalDateTime(nextDay, cal);
+        }
+      } else {
+        const startDate = Utils.parseDate(start);
+        if (!startDate) {
+          return Utils.fail("invalid_date", `Could not parse date: "${start}"`, 400, Utils.DATE_SUGGESTIONS);
+        }
+        newEvent.startDate = toCalDateTime(startDate, cal);
       }
-      newEvent.startDate = cal.createDateTime();
-      newEvent.startDate.nativeTime = startDate.getTime() * 1000;
     }
     if (end !== undefined) {
-      const endDate = Utils.parseDate(end);
-      if (!endDate) {
-        return Utils.fail("invalid_date", `Could not parse date: "${end}"`, 400, Utils.DATE_SUGGESTIONS);
+      if (allDay) {
+        const endDateOnly = parseDateOnly(end);
+        if (!endDateOnly) {
+          return Utils.fail("invalid_date", `Could not parse date: "${end}"`, 400, Utils.DATE_SUGGESTIONS);
+        }
+        newEvent.endDate = dateOnlyCalDateTime(endDateOnly, cal);
+      } else {
+        const endDate = Utils.parseDate(end);
+        if (!endDate) {
+          return Utils.fail("invalid_date", `Could not parse date: "${end}"`, 400, Utils.DATE_SUGGESTIONS);
+        }
+        newEvent.endDate = toCalDateTime(endDate, cal);
       }
-      newEvent.endDate = cal.createDateTime();
-      newEvent.endDate.nativeTime = endDate.getTime() * 1000;
     }
     if (location !== undefined) newEvent.setProperty("LOCATION", location);
     if (description !== undefined) newEvent.setProperty("DESCRIPTION", description);

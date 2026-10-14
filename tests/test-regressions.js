@@ -2,10 +2,8 @@
 
 // Regression tests for the twelve bugs reproduced during the review (plan 0.2).
 // Each case is added by the task that fixes it; this file was created by Task
-// 2.1. The 2.1/2.4/2.5/3.1/3.2/3.3/3.4 cases are present below; the remaining
-// cases, with their owning task:
-//
-//   5.2  GET /events?start=garbage -> 400
+// 2.1. All twelve cases are present below; the last one (5.2) was added by the
+// 5.1+5.2 batch.
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -62,6 +60,14 @@ test("2.5: end=next week, before=next week and start=next monday parse end-to-en
   assert.equal(calendarStart.status, 200);
   const calendarEnd = await h.request("GET", "/events", { queryString: "end=next+week" });
   assert.equal(calendarEnd.status, 200);
+});
+
+test("5.2: GET /events?start=garbage -> 400 invalid_date (was a 500)", async t => {
+  const h = experimentHarness({ t });
+  const result = await h.request("GET", "/events", { queryString: "start=garbage" });
+  assert.equal(result.status, 400);
+  assert.equal(result.body.code, "invalid_date");
+  assert.equal(h.instance.pendingRequests.size, 0, "no request may be left pending");
 });
 
 test("3.1: GET /messages/%3Cid%3E and PATCH ids:[\"<id>\"] find the message", async () => {

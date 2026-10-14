@@ -214,11 +214,13 @@ test("email and calendar accept identical date inputs (one parser)", async t => 
     assert.equal(email.status, 400, `email accepted ${input}`);
     assert.equal(email.body.code, "invalid_date", input);
 
-    // `end` (not `start`): GET /events?start=<unparseable> hits the range
-    // defaulting order fixed by Task 5.2, so the null check is not reachable.
-    const calendar = await h.request("GET", "/events", { queryString: `end=${encodeURIComponent(input)}` });
-    assert.equal(calendar.status, 400, `calendar accepted ${input}`);
-    assert.equal(calendar.body.code, "invalid_date", input);
+    // Both range ends are validated before the range is defaulted (Task
+    // 5.2), so `start=<unparseable>` must be a 400 too, not a 500.
+    for (const param of ["start", "end"]) {
+      const calendar = await h.request("GET", "/events", { queryString: `${param}=${encodeURIComponent(input)}` });
+      assert.equal(calendar.status, 400, `calendar accepted ${param}=${input}`);
+      assert.equal(calendar.body.code, "invalid_date", `${param}=${input}`);
+    }
   }
 });
 

@@ -328,7 +328,8 @@ const ALIASES = {
     description: ["desc", "details", "notes", "body", "content"],
     organizer: ["host", "owner", "creator"],
     attendees: ["participants", "invitees", "guests", "people"],
-    sendInvites: ["send_invites", "sendInvitations", "send_invitations", "notify"]
+    sendInvites: ["send_invites", "sendInvitations", "send_invitations", "notify"],
+    allDay: ["all_day"]
   }
 };
 
