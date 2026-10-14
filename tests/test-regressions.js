@@ -2,10 +2,9 @@
 
 // Regression tests for the twelve bugs reproduced during the review (plan 0.2).
 // Each case is added by the task that fixes it; this file was created by Task
-// 2.1. The 2.1/2.4/2.5 cases are present below; the remaining cases, with
+// 2.1. The 2.1/2.4/2.5/3.1 cases are present below; the remaining cases, with
 // their owning task:
 //
-//   3.1  GET /messages/%3Cid%3E and PATCH ids:["<id>"] find the message
 //   3.2  PATCH move_to + add_flags applies both; all moves failing -> not
 //        success; flags: ["unread"] marks unread
 //   3.3  move_to "Archive 2023" with only "Archive 2022" -> 404, nothing moved
@@ -67,6 +66,32 @@ test("2.5: end=next week, before=next week and start=next monday parse end-to-en
   assert.equal(calendarStart.status, 200);
   const calendarEnd = await h.request("GET", "/events", { queryString: "end=next+week" });
   assert.equal(calendarEnd.status, 200);
+});
+
+test("3.1: GET /messages/%3Cid%3E and PATCH ids:[\"<id>\"] find the message", async () => {
+  const folder = { id: "account1:/Inbox", name: "Inbox", accountId: "account1" };
+  const h = backgroundHarness({
+    messages: [{ id: 1, headerMessageId: "bracketed@example.test", read: false, folder }],
+    folders: [folder]
+  });
+
+  const get = await h.request("GET", "/messages/%3Cbracketed%40example.test%3E");
+  assert.equal(get.status, 200);
+  assert.equal(get.body.id, 1);
+  assert.equal(get.body.message_id, "bracketed@example.test");
+  assert.equal(h.queries.at(-1).headerMessageId, "bracketed@example.test",
+    "the bracketed path is normalized before querying");
+
+  const patch = await h.request("PATCH", "/messages", "", JSON.stringify({
+    ids: ["<bracketed@example.test>"],
+    add_flags: ["read"]
+  }));
+  assert.equal(patch.status, 200);
+  assert.equal(patch.body.success, true);
+  assert.equal(h.updates.length, 1);
+  assert.equal(h.updates[0].id, 1);
+  assert.equal(h.updates[0].properties.read, true);
+  assert.equal(h.messages[0].read, true);
 });
 
 test("Malformed JSON / bad % on /events → 400 (no hang, no pending leak)", async t => {

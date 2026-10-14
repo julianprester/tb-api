@@ -185,7 +185,9 @@ directly instead. Read status reflects Thunderbird's local state; use a scoped
 GET /messages/:message_id
 ```
 
-Returns full message content including body and attachments. The `message_id` is the Message-ID header value (URL-encoded). Angle brackets are optional.
+Returns full message content including body and attachments. The `message_id` is the Message-ID header value (URL-encoded). Angle brackets are optional: Thunderbird stores Message-IDs without them, and the API compares the text exactly, so `<abc123@example.com>`, `abc123@example.com` and surrounding whitespace are equivalent.
+
+If the same Message-ID appears in several folders (for example an Inbox copy and an archived copy), the first match is returned and the response includes `matches`, the number of copies found. To choose a specific copy, search by `mailbox` first and use the internal `id` from the result (a `mailbox` parameter for GET/PATCH is a planned follow-up).
 
 Example:
 ```bash
@@ -268,6 +270,11 @@ Update flags or move messages.
 | move_to | moveTo, destination, folder, mailbox | Destination folder |
 
 **Flag aliases**: `read`/`seen`, `flagged`/`starred`/`important`, `junk`/`spam`
+
+`ids` entries can be Message-IDs with or without angle brackets (and surrounding
+spaces) or internal numeric IDs. When a Message-ID appears in several folders,
+only the first match is changed; use the internal `id` returned by search to
+target a specific copy.
 
 ---
 

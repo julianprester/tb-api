@@ -53,7 +53,7 @@ curl -s "http://localhost:9595/identities"
 
 - **Date filters required for large mailboxes** - Without `after`/`before`, searches on archive/sent often timeout. Formats: `2024-01-15`, `today`, `yesterday`, `7 days ago`
 - **Read status** - List and single-message responses include boolean `read` (`false` means unread, not unknown). The `flags` array also contains `"read"` for read messages. Avoid `jq '.read // null'` or Python `message.get("read") or None`, which turn valid `false` into null. Older builds omitted the field; reload the updated extension. Getting message content does not mark it read.
-- **Use Message-ID strings for PATCH** - Use the RFC 5322 Message-ID (e.g., `<abc123@example.com>`), not internal numeric IDs
+- **Message-IDs work with or without angle brackets** - `<abc123@example.com>`, `abc123@example.com` and surrounding spaces are equivalent (URL-encode `<`, `>`, `@` in GET paths). Prefer Message-IDs over internal numeric IDs; both are accepted for GET and PATCH. When a Message-ID appears in several folders, GET returns the first match plus a `matches` count, and PATCH changes only the first match.
 - **Drafts only** - `POST /messages` always saves as draft for safety; messages must be sent manually from Thunderbird
 - **Opt-in freshness** - Use `refresh=true` with a specific mailbox to sync IMAP headers before searching. Refresh failures return errors, not stale results. Local folders return an explicit no-op; root/virtual folders and other protocols are unsupported. `timeoutMs` defaults to 30000 (max 60000); this does not guarantee offline body downloads.
 - **Flexible parameters** - Most parameters accept aliases (e.g., `q`/`query`/`search`, `mailbox`/`folder`)

@@ -220,31 +220,21 @@ async function searchMessages(params) {
  * Get single message by Message-ID with helpful errors
  */
 async function getMessage(messageId) {
-  // Try to be flexible with message ID format
-  let searchId = messageId;
-  
-  // If it looks like a bare ID without angle brackets, try adding them
-  if (!messageId.startsWith("<") && messageId.includes("@")) {
-    searchId = `<${messageId}>`;
-  }
-  
-  // Try original first
-  let result = await messenger.messages.query({ headerMessageId: messageId });
-  
-  // If not found and we modified it, try the modified version
-  if ((!result.messages || result.messages.length === 0) && searchId !== messageId) {
-    result = await messenger.messages.query({ headerMessageId: searchId });
-  }
-  
-  if (!result.messages || result.messages.length === 0) {
-    return Utils.fail("not_found", `Message not found: ${messageId}`, 404, [
-      "Verify the Message-ID is correct (check email headers)",
-      "The message may have been deleted or moved",
-      "Try searching by subject or sender instead: GET /messages?from=sender@example.com"
-    ]);
+  const resolved = await resolveMessageRef(messageId);
+  if (resolved.error) {
+    return Utils.fail(
+      resolved.code || "not_found",
+      resolved.error,
+      resolved.statusCode || 404,
+      [
+        "Verify the Message-ID is correct (check email headers)",
+        "The message may have been deleted or moved",
+        "Try searching by subject or sender instead: GET /messages?from=sender@example.com"
+      ]
+    );
   }
 
-  const msg = result.messages[0];
+  const msg = await messenger.messages.get(resolved.id);
   const full = await messenger.messages.getFull(msg.id);
   const attachments = await messenger.messages.listAttachments(msg.id);
 
@@ -276,6 +266,7 @@ async function getMessage(messageId) {
     read: !!msg.read,
     flags: getFlags(msg),
     mailbox: msg.folder?.name || "",
+    matches: resolved.matches,
     body,
     attachments: attachments.map(a => ({
       name: a.name,
@@ -288,41 +279,46 @@ async function getMessage(messageId) {
 }
 
 /**
- * Resolve a message reference to internal Thunderbird ID
- * Accepts either an internal ID (number) or a Message-ID header string
+ * Normalize a Message-ID reference to the form Thunderbird stores.
+ * Thunderbird strips angle brackets and compares Message-IDs exactly
+ * (plan Appendix A.1), so ` <id@example.com> ` and `id@example.com` both
+ * become `id@example.com`.
+ */
+function normalizeMessageId(ref) {
+  let id = String(ref).trim();
+  if (id.startsWith("<") && id.endsWith(">")) id = id.slice(1, -1).trim();
+  return id;
+}
+
+/**
+ * Resolve a message reference to internal Thunderbird ID.
+ * Accepts an internal ID (number or numeric string) or a Message-ID header
+ * string with or without angle brackets. Returns { id, matches } on success
+ * (matches is the number of messages sharing a Message-ID) or a Utils.fail
+ * result on failure.
  */
 async function resolveMessageRef(ref) {
-  // If it's a number or numeric string, use directly
-  const asInt = parseInt(ref, 10);
-  if (!isNaN(asInt) && String(asInt) === String(ref)) {
-    // Verify the message exists
+  const id = normalizeMessageId(ref);
+
+  // Numbers and numeric strings are internal Thunderbird IDs, never
+  // Message-IDs: verify them with messages.get() and do not fall back.
+  const asInt = parseInt(id, 10);
+  if (!isNaN(asInt) && String(asInt) === id) {
     try {
       await messenger.messages.get(asInt);
-      return { id: asInt };
+      return { id: asInt, matches: 1 };
     } catch {
       return Utils.fail("not_found", `Message not found with ID: ${ref}`, 404);
     }
   }
 
-  // Otherwise, treat as Message-ID header and query
-  // Handle angle brackets and URL encoding
-  let searchId = ref;
-  if (searchId.startsWith("<") && searchId.endsWith(">")) {
-    searchId = searchId.slice(1, -1);
-  }
-  
-  const result = await messenger.messages.query({ headerMessageId: searchId });
+  // Everything else is an exact Message-ID header lookup. Thunderbird stores
+  // Message-IDs without angle brackets, so query the normalized value only.
+  const result = await messenger.messages.query({ headerMessageId: id });
   if (!result.messages || result.messages.length === 0) {
-    // Try with original if we modified it
-    if (searchId !== ref) {
-      const result2 = await messenger.messages.query({ headerMessageId: ref });
-      if (result2.messages && result2.messages.length > 0) {
-        return { id: result2.messages[0].id };
-      }
-    }
     return Utils.fail("not_found", `Message not found with Message-ID: "${ref}"`, 404);
   }
-  return { id: result.messages[0].id };
+  return { id: result.messages[0].id, matches: result.messages.length };
 }
 
 /**
@@ -539,20 +535,17 @@ async function updateMessages(params) {
     ]);
   }
 
-  // Resolve message IDs (could be headerMessageId strings or internal IDs)
+  // Resolve message IDs (Message-ID headers or internal IDs) through the
+  // single resolver.
   const messageIds = [];
   const notFound = [];
-  
+
   for (const id of ids) {
-    if (typeof id === "number") {
-      messageIds.push(id);
+    const resolved = await resolveMessageRef(id);
+    if (resolved.error) {
+      notFound.push(id);
     } else {
-      const result = await messenger.messages.query({ headerMessageId: id });
-      if (result.messages && result.messages.length > 0) {
-        messageIds.push(result.messages[0].id);
-      } else {
-        notFound.push(id);
-      }
+      messageIds.push(resolved.id);
     }
   }
 
