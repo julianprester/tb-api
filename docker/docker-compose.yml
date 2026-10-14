@@ -11,8 +11,8 @@ services:
       - DISPLAY_WIDTH=1920
       - DISPLAY_HEIGHT=1080
       - TB_API_TOKEN=${TB_API_TOKEN:?Set TB_API_TOKEN (e.g. openssl rand -hex 32) in docker/.env}
-      - TB_API_HOST=0.0.0.0
-      - TB_API_HOSTS=thunderbird
+      - TB_API_HOST=${TB_API_HOST:-0.0.0.0}
+      - TB_API_HOSTS=${TB_API_HOSTS:-thunderbird}
       - TB_API_ALLOWED_ORIGINS=${TB_API_ALLOWED_ORIGINS:-}
       - VNC_PASSWORD=${VNC_PASSWORD:-}
       - KEEP_APP_RUNNING=1
