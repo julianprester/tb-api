@@ -55,11 +55,15 @@ async function searchContacts(params) {
 
   let contacts = [];
 
-  // Get contacts from specific address book or all
+  // Get contacts from specific address book or all. The resolved book is
+  // reported in the response (I4) so a fuzzy `addressbook=` typo is visible
+  // instead of silently searching a different book.
+  let resolvedAddressbook = null;
   if (addressbook) {
     const resolved = await resolveAddressBook(addressbook, "read");
     if (resolved.error) return resolved;
     contacts = await messenger.contacts.list(resolved.id);
+    resolvedAddressbook = { id: resolved.id, name: resolved.name, matched_by: resolved.matched_by };
   } else {
     const books = await messenger.addressBooks.list();
 
@@ -91,7 +95,8 @@ async function searchContacts(params) {
       contacts: [],
       total: 0,
       has_more: false,
-      hints: hints.length > 0 ? hints : ["No contacts found"]
+      hints: hints.length > 0 ? hints : ["No contacts found"],
+      ...(resolvedAddressbook ? { resolved_addressbook: resolvedAddressbook } : {})
     };
   }
 
@@ -101,7 +106,8 @@ async function searchContacts(params) {
   return {
     contacts: contacts.map(c => formatContact(c)),
     total: contacts.length,
-    has_more: hasMore
+    has_more: hasMore,
+    ...(resolvedAddressbook ? { resolved_addressbook: resolvedAddressbook } : {})
   };
 }
 

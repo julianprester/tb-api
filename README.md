@@ -96,8 +96,13 @@ curl --max-time 65 -X POST "http://localhost:9595/mailboxes/refresh?mailbox=sent
 Successful refresh:
 
 ```json
-{"folder_id":"account1://Sent","mailbox":"Sent","refreshed":true,"elapsed_ms":120}
+{"folder_id":"account1://Sent","mailbox":"Sent","refreshed":true,"elapsed_ms":120,"resolved_mailbox":{"id":"account1://Sent","name":"Sent","matched_by":"role"}}
 ```
+
+The response includes `resolved_mailbox: { "id", "name", "matched_by" }`: the
+folder that was refreshed and how it was matched (`id`, `role`, `name`, or
+`fuzzy`). Reporting a fuzzy choice makes a typo visible instead of silently
+refreshing a different folder.
 
 Local folders have no remote server to synchronize and return an explicit no-op:
 
@@ -391,6 +396,11 @@ Most parameters also accept their `snake_case` spelling (`start_date`,
 `calendar_id`, `end_time`, ...); `start`/`end` accept the full
 [date grammar](#date-and-time-formats).
 
+When a `calendar` filter was supplied, the response also includes
+`resolved_calendar: { "id", "name", "matched_by" }`: the calendar that was
+read and how it was matched (`id`, `name`, or `fuzzy`). Reporting a fuzzy
+choice makes a typo visible instead of silently reading a different calendar.
+
 #### Upcoming Events
 
 ```http
@@ -408,7 +418,9 @@ curl "http://localhost:9595/upcoming?calendar=Work"
 
 The response contains `events` (the same [event fields](#event-fields) as
 `GET /events`), the window bounds `from`/`until` as local
-`YYYY-MM-DDTHH:MM:SS`, and `hints` when nothing is left today.
+`YYYY-MM-DDTHH:MM:SS`, and `hints` when nothing is left today. When `calendar`
+was supplied, it also carries the same `resolved_calendar` object as
+`GET /events`.
 
 #### Create Event
 
@@ -584,6 +596,12 @@ Example:
 curl "http://localhost:9595/contacts?q=alice"
 curl "http://localhost:9595/contacts?addressbook=Personal&limit=100"
 ```
+
+When `addressbook` was supplied, the response includes
+`resolved_addressbook: { "id", "name", "matched_by" }`: the address book that
+was searched and how it was matched (`id`, `name`, or `fuzzy`). Reporting a
+fuzzy choice makes a typo visible instead of silently searching a different
+address book.
 
 #### Create Contact
 

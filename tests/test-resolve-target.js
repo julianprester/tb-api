@@ -568,3 +568,68 @@ test("I3: exactly one writable address book is still auto-selected", async () =>
   assert.equal(created.length, 1);
   assert.equal(created[0].addressbook, "book1", "the only writable book is used");
 });
+
+// ---------------------------------------------------------------------------
+// I4: reads report the calendar/address book they resolved
+// ---------------------------------------------------------------------------
+
+test("I4: calendar reads report resolved_calendar with matched_by fuzzy", async t => {
+  const h = experimentHarness({
+    t,
+    calendars: [
+      { id: "cal1", name: "Archive 2022", readOnly: false },
+      { id: "cal2", name: "Work", readOnly: false }
+    ],
+    items: [
+      { id: "e1", calendarId: "cal1", title: "Old", start: "2030-01-01T10:00:00", end: "2030-01-01T11:00:00" }
+    ]
+  });
+  const expected = { id: "cal1", name: "Archive 2022", matched_by: "fuzzy" };
+
+  const events = await h.request("GET", "/events", {
+    queryString: "calendar=Archive+2023&start=2030-01-01&end=2030-01-02"
+  });
+  assert.equal(events.status, 200);
+  assert.deepEqual(plain(events.body.resolved_calendar), expected);
+  assert.equal(events.body.events.length, 1, "the fuzzy calendar's event is returned");
+
+  const upcoming = await h.request("GET", "/upcoming", { queryString: "calendar=Archive+2023" });
+  assert.equal(upcoming.status, 200);
+  assert.deepEqual(plain(upcoming.body.resolved_calendar), expected);
+
+  // No calendar parameter means no claim about a resolved target.
+  const all = await h.request("GET", "/events", { queryString: "start=2030-01-01&end=2030-01-02" });
+  assert.equal(all.status, 200);
+  assert.equal(Object.hasOwn(all.body, "resolved_calendar"), false);
+});
+
+test("I4: contact searches report resolved_addressbook in both response shapes", async () => {
+  const h = backgroundHarness({
+    messenger: {
+      addressBooks: {
+        async list() { return [{ id: "book1", name: "Personal", readOnly: false }]; }
+      },
+      contacts: {
+        async list() {
+          return [{ id: "c1", parentId: "book1", properties: { PrimaryEmail: "a@example.test", DisplayName: "A" } }];
+        }
+      }
+    }
+  });
+  const expected = { id: "book1", name: "Personal", matched_by: "fuzzy" };
+
+  const found = await h.request("GET", "/contacts", "addressbook=Personel");
+  assert.equal(found.status, 200);
+  assert.equal(found.body.total, 1);
+  assert.deepEqual(plain(found.body.resolved_addressbook), expected);
+
+  // The empty-result branch keeps the same metadata.
+  const empty = await h.request("GET", "/contacts", "addressbook=Personel&q=nobody");
+  assert.equal(empty.status, 200);
+  assert.equal(empty.body.total, 0);
+  assert.deepEqual(plain(empty.body.resolved_addressbook), expected);
+
+  const all = await h.request("GET", "/contacts", "q=a");
+  assert.equal(all.status, 200);
+  assert.equal(Object.hasOwn(all.body, "resolved_addressbook"), false);
+});

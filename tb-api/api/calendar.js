@@ -407,7 +407,9 @@ function findCalendar(calendarId, cal, mode = "read") {
   if (resolved.error) return { error: resolved };
 
   const calendar = calendars.find(candidate => candidate.id === resolved.id);
-  return { calendar };
+  // Keep the resolver's `{ id, name, matched_by }` so read endpoints can
+  // report which calendar a fuzzy name actually chose.
+  return { calendar, resolved };
 }
 
 /**
@@ -520,10 +522,12 @@ async function listEvents(params, cal, Ci) {
 
   // Get calendars to search. Listing is a read: fuzzy names are allowed.
   let calendars;
+  let resolvedCalendar = null;
   if (calendarId) {
     const found = findCalendar(calendarId, cal);
     if (found.error) return found.error;
     calendars = [found.calendar];
+    resolvedCalendar = found.resolved;
   } else {
     calendars = cal.manager.getCalendars();
   }
@@ -550,6 +554,9 @@ async function listEvents(params, cal, Ci) {
 
   // Include helpful hints when no results
   const response = { events: results };
+  // A fuzzy `calendar=` typo must be visible instead of silently reading a
+  // different target (I4); omitting the parameter reports nothing.
+  if (resolvedCalendar) response.resolved_calendar = resolvedCalendar;
   if (results.length === 0) {
     response.hints = [
       `No events found between ${startDate.toISOString().split('T')[0]} and ${endDate.toISOString().split('T')[0]}`,
@@ -581,10 +588,12 @@ async function upcomingEvents(params, cal, Ci) {
 
   // Listing upcoming events is a read, so fuzzy calendar names are allowed.
   let calendars;
+  let resolvedCalendar = null;
   if (calendarId) {
     const found = findCalendar(calendarId, cal);
     if (found.error) return found.error;
     calendars = [found.calendar];
+    resolvedCalendar = found.resolved;
   } else {
     calendars = cal.manager.getCalendars();
   }
@@ -615,6 +624,8 @@ async function upcomingEvents(params, cal, Ci) {
     from: formatLocalDate(now),
     until: formatLocalDate(endOfDay)
   };
+  // Report a fuzzy `calendar=` choice, exactly like GET /events does (I4).
+  if (resolvedCalendar) response.resolved_calendar = resolvedCalendar;
 
   if (results.length === 0) {
     response.hints = ["No more events scheduled for today"];
