@@ -11,6 +11,25 @@ PASSED=0
 FAILED=0
 SKIPPED=0
 
+# Optional Bearer auth: TB_API_TOKEN from the environment, falling back to a
+# .env file (tests/.env, repo root, then docker/.env) when unset.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -z "${TB_API_TOKEN:-}" ]; then
+    for env_file in "$SCRIPT_DIR/.env" "$SCRIPT_DIR/../.env" "$SCRIPT_DIR/../docker/.env"; do
+        if [ -f "$env_file" ]; then
+            env_token=$(sed -n 's/^TB_API_TOKEN=//p' "$env_file" | tail -n 1 | tr -d '"' | tr -d "'" | tr -d '\r')
+            if [ -n "$env_token" ]; then
+                TB_API_TOKEN="$env_token"
+                break
+            fi
+        fi
+    done
+fi
+AUTH_HEADER=()
+if [ -n "${TB_API_TOKEN:-}" ]; then
+    AUTH_HEADER=(-H "Authorization: Bearer $TB_API_TOKEN")
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -33,23 +52,28 @@ json_request() {
     
     if [ -n "$data" ]; then
         timeout 10 curl -s -X "$method" "$BASE_URL$endpoint" \
+            "${AUTH_HEADER[@]}" \
             -H "Content-Type: application/json" \
             -d "$data" 2>/dev/null
     else
-        timeout 10 curl -s -X "$method" "$BASE_URL$endpoint" 2>/dev/null
+        timeout 10 curl -s -X "$method" "$BASE_URL$endpoint" "${AUTH_HEADER[@]}" 2>/dev/null
     fi
 }
 
 get_request() {
-    timeout 10 curl -s "$BASE_URL$1" 2>/dev/null
+    timeout 10 curl -s "${AUTH_HEADER[@]}" "$BASE_URL$1" 2>/dev/null
 }
 
 is_success() {
     echo "$1" | grep -q '"success"[[:space:]]*:[[:space:]]*true'
 }
 
+# Check if response contains an error. Every API error carries a stable
+# machine-readable `code`; the only no-code bodies are the bare route fallbacks
+# (401 Unauthorized, 404 Not found, 405 Method not allowed), which the few
+# tests that accept them check with an explicit grep.
 is_error() {
-    echo "$1" | grep -q '"error"'
+    echo "$1" | grep -q '"error"' && echo "$1" | grep -q '"code"'
 }
 
 has_field() {
@@ -124,7 +148,7 @@ fi
 subsection "Invalid/Malformed Data"
 
 # Test 1.4: Invalid JSON
-RESPONSE=$(timeout 5 curl -s -X POST "$BASE_URL/messages" -H "Content-Type: application/json" -d '{invalid}' 2>/dev/null)
+RESPONSE=$(timeout 5 curl -s "${AUTH_HEADER[@]}" -X POST "$BASE_URL/messages" -H "Content-Type: application/json" -d '{invalid}' 2>/dev/null)
 # Should either error or handle gracefully - not crash (empty response is OK)
 print_result "Invalid JSON is handled gracefully (no crash)" "true"
 
@@ -176,6 +200,50 @@ if has_field "$RESPONSE" "messages" || is_error "$RESPONSE"; then
     print_result "Non-numeric limit is handled" "true"
 else
     print_result "Non-numeric limit is handled" "false" "$RESPONSE"
+fi
+
+subsection "Message Ordering & Metadata"
+
+# Test 1.10: /messages is newest-first by default (D6). ISO 8601 dates sort
+# lexicographically.
+RESPONSE=$(get_request "/messages?limit=5")
+if echo "$RESPONSE" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+dates = [m.get('date') for m in data.get('messages', []) if m.get('date')]
+sys.exit(0 if len(dates) < 2 or dates == sorted(dates, reverse=True) else 1)
+" 2>/dev/null; then
+    print_result "Default /messages order is newest-first" "true"
+else
+    print_result "Default /messages order is newest-first" "false" "$RESPONSE"
+fi
+
+# Test 1.11: sort=date_asc returns oldest-first
+RESPONSE=$(get_request "/messages?limit=5&sort=date_asc")
+if echo "$RESPONSE" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+dates = [m.get('date') for m in data.get('messages', []) if m.get('date')]
+sys.exit(0 if len(dates) < 2 or dates == sorted(dates) else 1)
+" 2>/dev/null; then
+    print_result "sort=date_asc returns oldest-first" "true"
+else
+    print_result "sort=date_asc returns oldest-first" "false" "$RESPONSE"
+fi
+
+# Test 1.12: matched/complete/has_more metadata (matched is only present once
+# the search finished)
+RESPONSE=$(get_request "/messages?limit=5")
+if has_field "$RESPONSE" "has_more" && echo "$RESPONSE" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+if data.get('complete') is True and 'matched' not in data:
+    sys.exit(1)
+sys.exit(0)
+" 2>/dev/null; then
+    print_result "Search metadata includes has_more and matched (when complete)" "true"
+else
+    print_result "Search metadata includes has_more and matched (when complete)" "false" "$RESPONSE"
 fi
 
 # ============================================
@@ -269,7 +337,7 @@ section "Security Concerns"
 subsection "Injection Attempts"
 
 # Test 3.1: SQL injection attempt in search
-RESPONSE=$(get_request "/messages?q='; DROP TABLE messages; --")
+RESPONSE=$(get_request "/messages?q=%27%3B%20DROP%20TABLE%20messages%3B%20--")
 if has_field "$RESPONSE" "messages" || has_field "$RESPONSE" "hints"; then
     print_result "SQL injection in search is handled safely" "true"
 else
@@ -329,7 +397,7 @@ fi
 
 # Test 3.8: Very long email address (100 chars local part)
 LONG_LOCAL=$(python3 -c "print('a' * 100)")
-RESPONSE=$(timeout 5 bash -c "curl -s -X POST '$BASE_URL/contacts' -H 'Content-Type: application/json' -d '{\"email\": \"${LONG_LOCAL}@example.com\"}'" 2>/dev/null)
+RESPONSE=$(json_request POST "/contacts" "{\"email\": \"${LONG_LOCAL}@example.com\"}")
 if [ -n "$RESPONSE" ]; then
     print_result "Long email local part (100 chars) is handled" "true"
 else
@@ -952,7 +1020,7 @@ if [ -n "$CALENDAR_ID" ]; then
     
     # Test 12.3: Event with very long title (200 chars)
     LONG_TITLE=$(python3 -c "print('A' * 200)")
-    RESPONSE=$(timeout 5 bash -c "curl -s -X POST '$BASE_URL/events' -H 'Content-Type: application/json' -d '{\"calendar\": \"$CALENDAR_ID\", \"title\": \"$LONG_TITLE\", \"start\": \"tomorrow\", \"end\": \"in 2 days\"}'" 2>/dev/null)
+    RESPONSE=$(json_request POST "/events" "{\"calendar\": \"$CALENDAR_ID\", \"title\": \"$LONG_TITLE\", \"start\": \"tomorrow\", \"end\": \"in 2 days\"}")
     if is_success "$RESPONSE" || is_error "$RESPONSE"; then
         print_result "Event with 200-char title handled" "true"
         # Cleanup if created
@@ -997,12 +1065,12 @@ fi
 section "HTTP Method Handling"
 
 # Test 13.1: OPTIONS request (CORS preflight)
-RESPONSE=$(curl -s -X OPTIONS "$BASE_URL/messages" 2>/dev/null)
+RESPONSE=$(curl -s "${AUTH_HEADER[@]}" -X OPTIONS "$BASE_URL/messages" 2>/dev/null)
 # Should not crash
 print_result "OPTIONS request handled" "true"
 
 # Test 13.2: HEAD request
-RESPONSE=$(curl -s -I "$BASE_URL/" 2>/dev/null)
+RESPONSE=$(curl -s "${AUTH_HEADER[@]}" -I "$BASE_URL/" 2>/dev/null)
 if [ -n "$RESPONSE" ]; then
     print_result "HEAD request handled" "true"
 else
@@ -1010,7 +1078,7 @@ else
 fi
 
 # Test 13.3: PUT on read-only endpoint
-RESPONSE=$(curl -s -X PUT "$BASE_URL/mailboxes" -H "Content-Type: application/json" -d '{}' 2>/dev/null)
+RESPONSE=$(curl -s "${AUTH_HEADER[@]}" -X PUT "$BASE_URL/mailboxes" -H "Content-Type: application/json" -d '{}' 2>/dev/null)
 if is_error "$RESPONSE" || echo "$RESPONSE" | grep -q "Not found"; then
     print_result "PUT on read-only endpoint returns error" "true"
 else

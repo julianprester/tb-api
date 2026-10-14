@@ -10,6 +10,25 @@ BASE_URL="${1:-http://localhost:9595}"
 PASSED=0
 FAILED=0
 
+# Optional Bearer auth: TB_API_TOKEN from the environment, falling back to a
+# .env file (tests/.env, repo root, then docker/.env) when unset.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -z "${TB_API_TOKEN:-}" ]; then
+    for env_file in "$SCRIPT_DIR/.env" "$SCRIPT_DIR/../.env" "$SCRIPT_DIR/../docker/.env"; do
+        if [ -f "$env_file" ]; then
+            env_token=$(sed -n 's/^TB_API_TOKEN=//p' "$env_file" | tail -n 1 | tr -d '"' | tr -d "'" | tr -d '\r')
+            if [ -n "$env_token" ]; then
+                TB_API_TOKEN="$env_token"
+                break
+            fi
+        fi
+    done
+fi
+AUTH_HEADER=()
+if [ -n "${TB_API_TOKEN:-}" ]; then
+    AUTH_HEADER=(-H "Authorization: Bearer $TB_API_TOKEN")
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -30,10 +49,27 @@ json_request() {
     
     if [ -n "$data" ]; then
         curl -s -X "$method" "$BASE_URL$endpoint" \
+            "${AUTH_HEADER[@]}" \
             -H "Content-Type: application/json" \
             -d "$data"
     else
-        curl -s -X "$method" "$BASE_URL$endpoint"
+        curl -s -X "$method" "$BASE_URL$endpoint" "${AUTH_HEADER[@]}"
+    fi
+}
+
+# Same as json_request but appends the HTTP status code on a final line
+json_request_status() {
+    local method="$1"
+    local endpoint="$2"
+    local data="$3"
+    
+    if [ -n "$data" ]; then
+        curl -s -w "\n%{http_code}" -X "$method" "$BASE_URL$endpoint" \
+            "${AUTH_HEADER[@]}" \
+            -H "Content-Type: application/json" \
+            -d "$data"
+    else
+        curl -s -w "\n%{http_code}" -X "$method" "$BASE_URL$endpoint" "${AUTH_HEADER[@]}"
     fi
 }
 
@@ -76,7 +112,7 @@ echo ""
 
 # Get first writable calendar (readOnly: false)
 echo "Finding writable calendar..."
-CALENDARS_RESPONSE=$(curl -s "$BASE_URL/calendars")
+CALENDARS_RESPONSE=$(curl -s "${AUTH_HEADER[@]}" "$BASE_URL/calendars")
 # Find a calendar with readOnly: false by looking for id before a readOnly: false
 CALENDAR_ID=$(echo "$CALENDARS_RESPONSE" | python3 -c "
 import json, sys
@@ -141,6 +177,89 @@ else
             print_result "Delete event" "false" "$DELETE_RESPONSE"
         fi
     fi
+
+    # Test 4: A recurring event cannot be deleted without an explicit target
+    # (D7). With the shipped API the request is rejected with 409 before
+    # anything changes, so the existing series is left untouched.
+    echo "4. Deleting a recurring event without a scope (expect 409)..."
+    RECURRING_RESPONSE=$(json_request_status GET "/events?start=today&end=in%2030%20days")
+    RECURRING_BODY_JSON=$(echo "$RECURRING_RESPONSE" | sed '$d')
+    RECURRING_TARGET=$(echo "$RECURRING_BODY_JSON" | python3 -c "
+import json, sys
+from urllib.parse import quote
+data = json.load(sys.stdin)
+for event in data.get('events', []):
+    if event.get('recurrenceId') and event.get('id') and event.get('calendar'):
+        print('%s|%s' % (quote(event['id'], safe=''), quote(event['calendar'], safe='')))
+        break
+" 2>/dev/null)
+    if [ -z "$RECURRING_TARGET" ]; then
+        echo -e "  ${YELLOW}SKIP${NC} Delete recurring event test: no recurring event found"
+    else
+        RECURRING_ID="${RECURRING_TARGET%%|*}"
+        RECURRING_CAL="${RECURRING_TARGET#*|}"
+        # Safety: probe the same ambiguity guard with PATCH first. A PATCH
+        # without recurrenceId/scope cannot change data when it is rejected,
+        # and only a live guard makes the DELETE probe below safe to attempt.
+        RECURRING_GUARD=$(json_request_status PATCH "/events/$RECURRING_ID?calendar=$RECURRING_CAL")
+        RECURRING_GUARD_STATUS=$(echo "$RECURRING_GUARD" | tail -n 1)
+        RECURRING_GUARD_BODY=$(echo "$RECURRING_GUARD" | sed '$d')
+        if [ "$RECURRING_GUARD_STATUS" != "409" ] || ! echo "$RECURRING_GUARD_BODY" | grep -q '"ambiguous_recurrence"'; then
+            print_result "Delete recurring event without scope is 409 ambiguous_recurrence" "false" "PATCH guard missing (status $RECURRING_GUARD_STATUS); DELETE not attempted"
+        else
+            RECURRING_DELETE=$(json_request_status DELETE "/events/$RECURRING_ID?calendar=$RECURRING_CAL")
+            RECURRING_STATUS=$(echo "$RECURRING_DELETE" | tail -n 1)
+            RECURRING_BODY=$(echo "$RECURRING_DELETE" | sed '$d')
+            if [ "$RECURRING_STATUS" = "409" ] && echo "$RECURRING_BODY" | grep -q '"code"[[:space:]]*:[[:space:]]*"ambiguous_recurrence"'; then
+                print_result "Delete recurring event without scope is 409 ambiguous_recurrence" "true"
+            else
+                print_result "Delete recurring event without scope is 409 ambiguous_recurrence" "false" "status $RECURRING_STATUS: $RECURRING_BODY"
+            fi
+        fi
+    fi
+
+    # Test 5: Invitations report a machine-readable outcome (Task 5.4):
+    # invitations.status replaces the removed invitesSent field.
+    echo "5. Creating a test event with invitations..."
+    INVITE_IDENTITY=$(curl -s "${AUTH_HEADER[@]}" "$BASE_URL/identities" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+identities = data.get('identities', [])
+print(identities[0].get('email', '') if identities else '')
+" 2>/dev/null)
+    if [ -z "$INVITE_IDENTITY" ]; then
+        echo -e "  ${YELLOW}SKIP${NC} Invitation status test: no identity available"
+    else
+        INVITE_RESPONSE=$(json_request POST "/events" "{
+        \"calendar\": \"$CALENDAR_ID\",
+        \"title\": \"API Test Event - INVITE - DELETE ME\",
+        \"start\": \"$TOMORROW\",
+        \"end\": \"$TOMORROW_END\",
+        \"organizer\": \"$INVITE_IDENTITY\",
+        \"attendees\": [\"$INVITE_IDENTITY\"],
+        \"sendInvites\": true
+    }")
+        INVITE_EVENT_ID=$(json_get "$INVITE_RESPONSE" "id")
+        INVITE_STATUS=$(echo "$INVITE_RESPONSE" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+print((data.get('invitations') or {}).get('status', ''))
+" 2>/dev/null)
+        case "$INVITE_STATUS" in
+            draft_saved|sent|queued)
+                print_result "Invitation outcome reported via invitations.status" "true"
+                ;;
+            *)
+                print_result "Invitation outcome reported via invitations.status" "false" "$INVITE_RESPONSE"
+                ;;
+        esac
+        # Clean up the event; the invitation draft is intentionally left for
+        # the user to inspect/delete, like the compose tests above.
+        if [ -n "$INVITE_EVENT_ID" ]; then
+            json_request DELETE "/events/$INVITE_EVENT_ID?calendar=$CALENDAR_ID" >/dev/null 2>&1
+        fi
+        echo -e "     ${YELLOW}NOTE: An invitation draft may have been created; it is not cleaned up.${NC}"
+    fi
 fi
 
 echo ""
@@ -153,7 +272,7 @@ echo ""
 
 # Get first writable address book (readOnly: false)
 echo "Finding writable address book..."
-ADDRESSBOOKS_RESPONSE=$(curl -s "$BASE_URL/addressbooks")
+ADDRESSBOOKS_RESPONSE=$(curl -s "${AUTH_HEADER[@]}" "$BASE_URL/addressbooks")
 # Find an address book with readOnly: false
 ADDRESSBOOK_ID=$(echo "$ADDRESSBOOKS_RESPONSE" | python3 -c "
 import json, sys
@@ -225,7 +344,7 @@ echo ""
 
 # Get a message to test with
 echo "Finding a message to test flags..."
-MESSAGES_RESPONSE=$(curl -s "$BASE_URL/messages?limit=1")
+MESSAGES_RESPONSE=$(curl -s "${AUTH_HEADER[@]}" "$BASE_URL/messages?limit=1")
 MESSAGE_ID=$(json_get "$MESSAGES_RESPONSE" "message_id")
 
 if [ -z "$MESSAGE_ID" ]; then
@@ -274,7 +393,7 @@ echo ""
 
 # Get own email from identities
 echo "Finding sending identity..."
-IDENTITIES_RESPONSE=$(curl -s "$BASE_URL/identities")
+IDENTITIES_RESPONSE=$(curl -s "${AUTH_HEADER[@]}" "$BASE_URL/identities")
 OWN_EMAIL=$(json_get "$IDENTITIES_RESPONSE" "email")
 
 if [ -z "$OWN_EMAIL" ]; then
@@ -301,7 +420,7 @@ else
     echo ""
     echo "Finding a message to test reply/forward..."
     # Get a message from sent or archive (more likely to exist and be safe to test with)
-    TEST_MESSAGE_RESPONSE=$(curl -s "$BASE_URL/messages?limit=1")
+    TEST_MESSAGE_RESPONSE=$(curl -s "${AUTH_HEADER[@]}" "$BASE_URL/messages?limit=1")
     TEST_MESSAGE_ID=$(json_get "$TEST_MESSAGE_RESPONSE" "message_id")
     TEST_INTERNAL_ID=$(echo "$TEST_MESSAGE_RESPONSE" | python3 -c "
 import json, sys
