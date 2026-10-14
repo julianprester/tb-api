@@ -182,7 +182,10 @@ else
     # (D7). With the shipped API the request is rejected with 409 before
     # anything changes, so the existing series is left untouched.
     echo "4. Deleting a recurring event without a scope (expect 409)..."
-    RECURRING_RESPONSE=$(json_request_status GET "/events?start=today&end=in%2030%20days")
+    # Scope the lookup to the writable calendar: a read-only calendar's
+    # recurring occurrence would 403 on the PATCH probe (read_only) before the
+    # ambiguous_recurrence guard is reached, a false failure.
+    RECURRING_RESPONSE=$(json_request_status GET "/events?calendar=$CALENDAR_ID&start=today&end=in%2030%20days")
     RECURRING_BODY_JSON=$(echo "$RECURRING_RESPONSE" | sed '$d')
     RECURRING_TARGET=$(echo "$RECURRING_BODY_JSON" | python3 -c "
 import json, sys
