@@ -55,11 +55,11 @@ async function searchContacts(params) {
 
   let contacts = [];
 
-  // Get contacts from specific address book or all. The resolved book is
-  // reported in the response (I4) so a fuzzy `addressbook=` typo is visible
-  // instead of silently searching a different book.
+  // Get contacts from specific address book or all. A supplied-but-empty
+  // addressbook is not "all address books": resolving it reports
+  // invalid_target instead of silently widening the search (M13).
   let resolvedAddressbook = null;
-  if (addressbook) {
+  if (addressbook !== undefined && addressbook !== null) {
     const resolved = await resolveAddressBook(addressbook, "read");
     if (resolved.error) return resolved;
     contacts = await messenger.contacts.list(resolved.id);

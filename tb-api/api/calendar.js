@@ -520,10 +520,12 @@ async function listEvents(params, cal, Ci) {
 
   const results = [];
 
-  // Get calendars to search. Listing is a read: fuzzy names are allowed.
+  // Get calendars to search. Listing is a read: fuzzy names are allowed. A
+  // supplied-but-empty calendar is not "all calendars": it reaches the
+  // resolver and reports invalid_target (M13).
   let calendars;
   let resolvedCalendar = null;
-  if (calendarId) {
+  if (calendarId !== undefined && calendarId !== null) {
     const found = findCalendar(calendarId, cal);
     if (found.error) return found.error;
     calendars = [found.calendar];
@@ -587,9 +589,10 @@ async function upcomingEvents(params, cal, Ci) {
   const rangeEnd = toCalDateTime(endOfDay, cal);
 
   // Listing upcoming events is a read, so fuzzy calendar names are allowed.
+  // An empty calendar= reports invalid_target rather than all calendars (M13).
   let calendars;
   let resolvedCalendar = null;
-  if (calendarId) {
+  if (calendarId !== undefined && calendarId !== null) {
     const found = findCalendar(calendarId, cal);
     if (found.error) return found.error;
     calendars = [found.calendar];
@@ -729,7 +732,7 @@ async function createEvent(params, cal, Ci, Cc) {
   const allCalendars = cal.manager.getCalendars();
   const writableCalendars = allCalendars.filter(c => !c.readOnly);
   
-  if (!calendarId) {
+  if (calendarId === undefined || calendarId === null) {
     if (writableCalendars.length === 1) {
       calendarId = writableCalendars[0].id;
     } else if (writableCalendars.length === 0) {

@@ -55,7 +55,7 @@ async function refresh_folder(folderId, { timeoutMs } = {}) {
  */
 async function refreshMailbox(params) {
   const normalized = Utils.normalizeParams(params, Utils.ALIASES.emailSearch);
-  if (!normalized.mailbox) {
+  if (normalized.mailbox === undefined || normalized.mailbox === null) {
     return Utils.fail(
       "missing_mailbox",
       "mailbox is required for folder refresh",
@@ -312,7 +312,9 @@ async function searchMessages(params) {
   // Resolve mailbox with helpful error. Read mode keeps fuzzy matching but
   // reports the chosen folder as `resolved_mailbox` in the response.
   let resolvedMailbox = null;
-  if (mailbox) {
+  // A supplied-but-empty mailbox is not "no mailbox": resolving it reports
+  // invalid_mailbox instead of silently widening the search (M13).
+  if (mailbox !== undefined && mailbox !== null) {
     const resolved = await resolveMailboxWithSuggestions(mailbox);
     if (resolved.error) return resolved;
     resolvedMailbox = resolved;
@@ -643,7 +645,7 @@ async function composeMessage(params) {
   let identityId = null;
   let selectedIdentity = null;
 
-  if (identity) {
+  if (identity !== undefined && identity !== null) {
     // D4: choosing a sender identity is a write. Match the identity ID or the
     // exact email only; the display name is not a write target. The resolver's
     // "identity" kind uses the email as the matchable name.
@@ -865,7 +867,9 @@ async function updateMessages(params) {
   // destination must resolve exactly (ID, role, or case-insensitive name;
   // never fuzzy).
   let destination = null;
-  if (move_to) {
+  // "" is an explicit move target, not an absent one: resolving it reports
+  // invalid_mailbox instead of silently applying only the flags (M13).
+  if (move_to !== undefined && move_to !== null) {
     destination = await resolveMailboxWithSuggestions(move_to, "write");
     if (destination.error) return destination;
   }

@@ -633,3 +633,100 @@ test("I4: contact searches report resolved_addressbook in both response shapes",
   assert.equal(all.status, 200);
   assert.equal(Object.hasOwn(all.body, "resolved_addressbook"), false);
 });
+
+// ---------------------------------------------------------------------------
+// M13: an empty target was supplied; it is not the same as "no target"
+// ---------------------------------------------------------------------------
+
+test("M13: an empty mailbox is 400 invalid_mailbox on search and refresh", async () => {
+  const h = backgroundHarness();
+
+  const search = await h.request("GET", "/messages", "mailbox=");
+  assert.equal(search.status, 400);
+  assert.equal(search.body.code, "invalid_mailbox");
+  assert.equal(h.queries.length, 0, "an empty mailbox must not widen the search");
+
+  const refresh = await h.request("POST", "/mailboxes/refresh", "", JSON.stringify({ mailbox: "" }));
+  assert.equal(refresh.status, 400);
+  assert.equal(refresh.body.code, "invalid_mailbox");
+});
+
+test("M13: move_to \"\" is 400 invalid_mailbox and applies nothing", async () => {
+  const { h, moved } = mailboxHarness();
+
+  const patch = await h.request("PATCH", "/messages", "", JSON.stringify({
+    ids: [1],
+    add_flags: ["read"],
+    move_to: ""
+  }));
+  assert.equal(patch.status, 400);
+  assert.equal(patch.body.code, "invalid_mailbox");
+  assert.equal(h.updates.length, 0, "flags must not be applied when the move target is invalid");
+  assert.equal(moved.length, 0);
+  assert.notEqual(h.messages[0].read, true, "the message must not be marked read");
+});
+
+test("M13: an empty calendar is 400 invalid_target on reads and create", async t => {
+  const h = experimentHarness({ t });
+
+  for (const [method, path] of [["GET", "/events"], ["GET", "/upcoming"]]) {
+    const result = await h.request(method, path, { queryString: "calendar=" });
+    assert.equal(result.status, 400, `${method} ${path}`);
+    assert.equal(result.body.code, "invalid_target", `${method} ${path}`);
+  }
+
+  const create = await h.request("POST", "/events", {
+    headers: json,
+    body: JSON.stringify({ ...EVENT, calendar: "" })
+  });
+  assert.equal(create.status, 400);
+  assert.equal(create.body.code, "invalid_target");
+  assert.equal(h.cal.manager.getCalendars()[0].items.length, 0, "no event may be created");
+});
+
+test("M13: an empty addressbook is 400 invalid_target on create and search", async () => {
+  const created = [];
+  const h = backgroundHarness({
+    messenger: {
+      addressBooks: {
+        async list() {
+          return [
+            { id: "book1", name: "Personal", readOnly: false },
+            { id: "book2", name: "Work", readOnly: false }
+          ];
+        }
+      },
+      contacts: {
+        async list() { return []; },
+        async create(addressbook, id, properties) { created.push({ addressbook, id, properties }); return "new-id"; }
+      }
+    }
+  });
+
+  const create = await h.request("POST", "/contacts", "", JSON.stringify({
+    email: "a@example.test",
+    addressbook: ""
+  }));
+  assert.equal(create.status, 400);
+  assert.equal(create.body.code, "invalid_target");
+  assert.equal(created.length, 0, "an empty address book must not auto-select");
+
+  const search = await h.request("GET", "/contacts", "addressbook=");
+  assert.equal(search.status, 400);
+  assert.equal(search.body.code, "invalid_target");
+});
+
+test("M13: an empty identity is 400 invalid_target, not the default sender", async () => {
+  const h = backgroundHarness({
+    identities: [{ id: "id1", email: "me@example.test" }]
+  });
+
+  const result = await h.request("POST", "/messages", "", JSON.stringify({
+    to: "someone@example.test",
+    body: "Hello",
+    identity: ""
+  }));
+  assert.equal(result.status, 400);
+  assert.equal(result.body.code, "invalid_target");
+  assert.equal(h.composeCalls.length, 0, "nothing may be composed with a guessed identity");
+});
