@@ -507,3 +507,64 @@ test("two address books with the same name refuse a write with 409", async () =>
     { id: "b2", name: "Shared", account: null }
   ]);
 });
+
+test("I3: several writable address books refuse a create without addressbook", async () => {
+  const created = [];
+  const h = backgroundHarness({
+    messenger: {
+      addressBooks: {
+        async list() {
+          return [
+            { id: "book1", name: "Personal", readOnly: false },
+            { id: "book2", name: "Work", readOnly: false }
+          ];
+        }
+      },
+      contacts: {
+        async create(addressbook, id, properties) {
+          created.push({ addressbook, id, properties });
+          return "new-id";
+        }
+      }
+    }
+  });
+
+  const result = await h.request("POST", "/contacts", "", JSON.stringify({ email: "a@example.test" }));
+
+  assert.equal(result.status, 409);
+  assert.equal(result.body.code, "ambiguous_target");
+  assert.match(result.body.error, /addressbook is required/);
+  assert.deepEqual(plain(result.body.matches), [
+    { id: "book1", name: "Personal", account: null },
+    { id: "book2", name: "Work", account: null }
+  ]);
+  assert.equal(created.length, 0, "no contact may be created in a list-order guess");
+});
+
+test("I3: exactly one writable address book is still auto-selected", async () => {
+  const created = [];
+  const h = backgroundHarness({
+    messenger: {
+      addressBooks: {
+        async list() {
+          return [
+            { id: "book1", name: "Personal", readOnly: false },
+            { id: "book2", name: "Archive", readOnly: true }
+          ];
+        }
+      },
+      contacts: {
+        async create(addressbook, id, properties) {
+          created.push({ addressbook, id, properties });
+          return "new-id";
+        }
+      }
+    }
+  });
+
+  const result = await h.request("POST", "/contacts", "", JSON.stringify({ email: "a@example.test" }));
+
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  assert.equal(created.length, 1);
+  assert.equal(created[0].addressbook, "book1", "the only writable book is used");
+});

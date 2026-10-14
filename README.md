@@ -612,6 +612,10 @@ Content-Type: application/json
 
 *Address book auto-selected if only one writable book exists
 
+With several writable address books and no `addressbook`, the create is
+refused with `409 ambiguous_target` (the writable books are listed in
+`matches`) instead of writing to whichever comes first; nothing is created.
+
 #### Update Contact
 
 ```http

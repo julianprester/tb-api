@@ -69,7 +69,7 @@ curl -s "http://localhost:9595/upcoming"
 - **Recurring events** - `GET /events` returns each occurrence with `occurrence: true` and a `recurrenceId`. Edit or delete one occurrence with `recurrenceId` (timed series use the UTC instant, all-day series the `YYYY-MM-DD` date), or the whole series with `scope: "series"`. Both together is `400`, and a recurring event without either is `409 ambiguous_recurrence`; an unknown occurrence is `404 occurrence_not_found`.
 - **Opt-in freshness** - Use `refresh=true` with a specific mailbox to sync IMAP headers before searching. Refresh failures return errors, not stale results. Local folders return an explicit no-op; root/virtual folders and other protocols are unsupported. `timeoutMs` defaults to 30000 (max 60000); this does not guarantee offline body downloads.
 - **Flexible parameters** - Most parameters accept aliases (e.g., `mailbox`/`folder`). Aliases are per endpoint: `q` means full text for `GET /messages` but the contact search for `GET /contacts` (`query`/`q`/`search` there).
-- **Fuzzy matching** - Calendar and address book names are fuzzy matched; errors include suggestions
+- **Fuzzy matching** - Calendar and address book names are fuzzy matched; errors include suggestions. Writes need an exact ID or name, and `POST /contacts` auto-selects only when exactly one writable address book exists (several writable books without `addressbook` is `409 ambiguous_target`).
 
 ## Available Endpoints
 

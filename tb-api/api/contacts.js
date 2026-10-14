@@ -113,8 +113,11 @@ async function createContact(params) {
   const normalized = Utils.normalizeParams(params, Utils.ALIASES.contacts);
   let { addressbook, email, firstName, lastName, displayName } = normalized;
 
-  // Auto-select first writable address book if not specified
-  if (!addressbook) {
+  // Auto-select the only writable address book when none was specified.
+  // With several, choosing by list order silently wrote to the wrong book;
+  // refuse with the same 409 "ambiguous_target" shape the shared resolver
+  // uses for ambiguous write targets (and createEvent uses for calendars).
+  if (addressbook === undefined || addressbook === null) {
     const books = await messenger.addressBooks.list();
 
     const writableBooks = books.filter(b => !b.readOnly);
@@ -123,6 +126,20 @@ async function createContact(params) {
         "All address books are read-only",
         "Use GET /addressbooks to see available address books"
       ]);
+    }
+    if (writableBooks.length > 1) {
+      const matches = writableBooks.map(b => ({ id: b.id, name: b.name, account: null }));
+      const result = Utils.fail(
+        "ambiguous_target",
+        "addressbook is required when multiple writable address books exist",
+        409,
+        [
+          `Available writable address books: ${matches.map(m => `${m.name} (${m.id})`).join(", ")}`,
+          "Use GET /addressbooks to see address book IDs"
+        ]
+      );
+      result.matches = matches;
+      return result;
     }
     addressbook = writableBooks[0].id;
   } else {
