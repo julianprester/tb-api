@@ -933,6 +933,10 @@ async function createEvent(params, cal, Ci, Cc) {
       } else {
         response.note = "Invitation emails are NOT automatically sent. Use sendInvites:true or inviteMode to prepare invitations.";
       }
+    } else if (invitationsRequested) {
+      // An invitation with no attendees cannot be prepared: say so instead of
+      // silently skipping the requested invitations (M16).
+      response.warning = "Invitations requested but no attendees specified. No invitation was prepared.";
     }
 
     return response;

@@ -474,6 +474,8 @@ Creating an event returns `201 Created` with `invitations: { "status": "draft_sa
 `draft_saved` is the default; `sent`/`queued` need `inviteMode: "send"` plus
 `TB_API_ALLOW_SEND=1`; `failed` carries an `error` and still leaves the created
 event in place (a failed invitation is a warning, never a rolled-back event).
+Invitations requested without attendees are not prepared silently: the response
+carries a `warning` instead of an `invitations` object.
 The response also reports the stored `id`, `calendar` (name), `title`, `start`,
 `end`, `allDay`, and `organizer`/`attendees` when supplied.
 

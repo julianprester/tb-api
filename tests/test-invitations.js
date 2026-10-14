@@ -204,12 +204,52 @@ test("invitations without an organizer warn and create the event without invitin
   assert.equal(items(h).length, 1);
 });
 
+test("invitations with no attendees warn instead of silently skipping (M16)", async t => {
+  for (const attendees of [undefined, []]) {
+    const h = experimentHarness({ t, identities: IDENTITIES });
+    const payload = { ...EVENT, organizer: ORGANIZER, sendInvites: true };
+    if (attendees !== undefined) payload.attendees = attendees;
+
+    const created = await post(h, payload);
+
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    assert.match(created.body.warning, /no attendees/, JSON.stringify(created.body));
+    assert.equal(created.body.invitations, undefined);
+    assert.equal(h.composeCalls.length, 0, "nothing may be composed without attendees");
+    assert.equal(h.icsSerializers.length, 0);
+    assert.equal(items(h).length, 1, "the event is still created");
+  }
+});
+
+test("a failure after beginNew closes the invitation compose tab (M16)", async t => {
+  const h = experimentHarness({
+    t,
+    identities: IDENTITIES,
+    messenger: {
+      compose: {
+        async addAttachment() { throw new Error("attachment failed"); }
+      }
+    }
+  });
+
+  const created = await post(h, { ...INVITE, sendInvites: true });
+
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal(created.body.invitations.status, "failed");
+  assert.match(created.body.invitations.error, /attachment failed/);
+  assert.equal(callsOf(h, "beginNew").length, 1);
+  const removed = callsOf(h, "removeTab");
+  assert.equal(removed.length, 1, "the compose tab must be closed best-effort");
+  assert.equal(removed[0].tabId, "compose-tab-1");
+});
+
 // ---------------------------------------------------------------------------
 // ICS: serialized from the item addItem returned
 // ---------------------------------------------------------------------------
 
 test("the ICS is serialized from the saved item and its UID is the event id", async t => {
   const h = experimentHarness({ t, identities: IDENTITIES });
+  const addCalls = spyAddItem(h);
 
   const created = await post(h, { ...INVITE, sendInvites: true });
 

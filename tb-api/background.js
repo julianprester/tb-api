@@ -41,7 +41,7 @@ async function handleRequest(request) {
             "GET /calendars": "List all calendars",
             "GET /events": "List events. Params: calendar/calendarId/cal (optional), start (default: now), end (default: +30 days). Returns organizer/attendees if present; occurrences carry recurrenceId and occurrence:true; resolved_calendar {id,name,matched_by} when calendar was given",
             "GET /upcoming": "Events from now until the end of today, earliest first. Param: calendar/calendarId/cal (optional). Response: events, resolved_calendar {id,name,matched_by} when a calendar was given, from, until, hints",
-            "POST /events": "Create event (201 Created). Params: title/summary/name, start, end, calendar, location, description, organizer (must be one of your identities), attendees, allDay (strict boolean; date-only start/end), sendInvites (strict boolean alias for inviteMode=draft), inviteMode (draft default, or send with TB_API_ALLOW_SEND=1). Response carries invitations: {status: draft_saved|sent|queued|failed, error?} when invitations were requested",
+            "POST /events": "Create event (201 Created). Params: title/summary/name, start, end, calendar, location, description, organizer (must be one of your identities), attendees, allDay (strict boolean; date-only start/end), sendInvites (strict boolean alias for inviteMode=draft), inviteMode (draft default, or send with TB_API_ALLOW_SEND=1). Response carries invitations: {status: draft_saved|sent|queued|failed, error?} when invitations were requested with attendees, else a warning",
             "PATCH /events/:id": "Update event. Params: calendar (required), title, start, end, allDay, location, description, organizer, attendees (replaces all), recurrenceId (one occurrence), scope=series (whole series). A recurring event without recurrenceId/scope is 409 ambiguous_recurrence",
             "DELETE /events/:id": "Delete event. Params: calendar (required), recurrenceId (one occurrence), scope=series (whole series). A recurring event without recurrenceId/scope is 409 ambiguous_recurrence"
           },
@@ -150,6 +150,9 @@ browser.httpServer.onRequest.addListener(async (request) => {
 browser.httpServer.onSendInvitation.addListener(async (invitation) => {
   console.log(`[tb-api] Preparing calendar invitation for: ${invitation.eventTitle}`);
   
+  // Track the compose tab so a failure after beginNew can close it
+  // best-effort, exactly like composeMessage does (M16).
+  let tab = null;
   try {
     // Find the identity matching the organizer. The experiment validates this
     // already; never fall back to a different account (the old identities[0]
@@ -183,7 +186,7 @@ This invitation was sent via Thunderbird REST API.`;
     };
 
     // Create the compose window
-    const tab = await messenger.compose.beginNew(composeDetails);
+    tab = await messenger.compose.beginNew(composeDetails);
     
     // Add the ICS attachment
     // Create a File-like object from the ICS content
@@ -210,6 +213,9 @@ This invitation was sent via Thunderbird REST API.`;
     return { status };
   } catch (e) {
     console.error("[tb-api] Failed to prepare invitation email:", e);
+    if (tab) {
+      try { await messenger.tabs.remove(tab.id); } catch {}
+    }
     return { status: "failed", error: e.message };
   }
 });
