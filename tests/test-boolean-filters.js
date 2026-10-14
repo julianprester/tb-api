@@ -162,23 +162,33 @@ test("invalid refresh keeps its existing invalid_refresh error and never searche
 // ---------------------------------------------------------------------------
 
 const EVENT = { title: "Standup", start: "2030-01-01T10:00:00", end: "2030-01-01T11:00:00" };
-const INVITE = { ...EVENT, organizer: "organizer@example.test", attendees: ["guest@example.test"] };
+const ORGANIZER = "organizer@example.test";
+const IDENTITIES = [{ id: "id1", email: ORGANIZER, name: "Organizer" }];
+const INVITE = { ...EVENT, organizer: ORGANIZER, attendees: ["guest@example.test"] };
 
 async function postEvent(h, sendInvites) {
   const payload = sendInvites === undefined ? INVITE : { ...INVITE, sendInvites };
   return h.request("POST", "/events", { headers: json, body: JSON.stringify(payload) });
 }
 
+// Task 5.4: sendInvites stays the strict boolean alias (3.4), but true now
+// means "prepare an invitation draft" (inviteMode default), not "send now".
 test("calendar sendInvites absent or valid keeps its old meaning", async t => {
   for (const [value, expected] of [
     [undefined, false], [false, false], ["false", false], [0, false], ["0", false],
     [true, true], ["true", true], [1, true], ["1", true]
   ]) {
-    const h = experimentHarness({ t });
+    const h = experimentHarness({ t, identities: IDENTITIES });
     const result = await postEvent(h, value);
-    assert.equal(result.status, 200, `sendInvites=${String(value)}`);
+    assert.equal(result.status, 201, `sendInvites=${String(value)}`);
     assert.equal(result.body.success, true);
-    assert.equal(result.body.invitesSent, expected ? true : undefined);
+    assert.equal(result.body.invitesSent, undefined, "no assumed invite status");
+    assert.equal(result.body.invitesPending, undefined);
+    if (expected) {
+      assert.equal(result.body.invitations.status, "draft_saved", `sendInvites=${String(value)}`);
+    } else {
+      assert.equal(result.body.invitations, undefined);
+    }
     assert.equal(h.cal.manager.getCalendars()[0].items.length, 1, "the event is created either way");
   }
 });

@@ -135,7 +135,7 @@ test("create -> list round trip keeps the wall time of the default zone", async 
     start: "2026-10-14T09:30:00+02:00",
     end: "2026-10-14T10:30:00+02:00"
   });
-  assert.equal(created.status, 200, JSON.stringify(created.body));
+  assert.equal(created.status, 201, JSON.stringify(created.body));
   assert.equal(created.body.start, "2026-10-14T09:30:00");
   assert.equal(created.body.end, "2026-10-14T10:30:00");
   assert.equal(created.body.allDay, false);
@@ -157,7 +157,7 @@ test("allDay create stores an isDate event and keeps the exclusive end", async t
     end: "2026-10-17",
     allDay: true
   });
-  assert.equal(created.status, 200, JSON.stringify(created.body));
+  assert.equal(created.status, 201, JSON.stringify(created.body));
   assert.equal(created.body.allDay, true);
   assert.equal(created.body.start, "2026-10-14");
   assert.equal(created.body.end, "2026-10-17");
@@ -179,7 +179,7 @@ test("allDay create without end covers exactly one day", async t => {
   const h = experimentHarness({ t, timezone: DEFAULT_ZONE });
 
   const created = await create(h, { title: "Day off", start: "2026-12-24", allDay: true });
-  assert.equal(created.status, 200, JSON.stringify(created.body));
+  assert.equal(created.status, 201, JSON.stringify(created.body));
 
   const item = h.cal.manager.getCalendars()[0].items[0];
   assert.equal(item.startDate.nativeTime, Date.UTC(2026, 11, 24) * 1000);
@@ -200,7 +200,7 @@ test("allDay takes the strict boolean spellings and defaults to false", async t 
     const payload = { title: "Standup", start: "2026-10-14", end: "2026-10-15" };
     if (value !== undefined) payload.allDay = value;
     const result = await create(h, payload);
-    assert.equal(result.status, 200, `allDay=${JSON.stringify(value)}: ${JSON.stringify(result.body)}`);
+    assert.equal(result.status, 201, `allDay=${JSON.stringify(value)}: ${JSON.stringify(result.body)}`);
     const item = h.cal.manager.getCalendars()[0].items[0];
     assert.equal(item.startDate.isDate, expected, `allDay=${JSON.stringify(value)}`);
   }
@@ -208,7 +208,7 @@ test("allDay takes the strict boolean spellings and defaults to false", async t 
   // The snake_case alias is accepted too.
   const h = experimentHarness({ t });
   const aliased = await create(h, { title: "Holiday", start: "2026-10-14", all_day: true });
-  assert.equal(aliased.status, 200);
+  assert.equal(aliased.status, 201);
   assert.equal(h.cal.manager.getCalendars()[0].items[0].startDate.isDate, true);
 });
 

@@ -99,6 +99,21 @@ const DEFAULT_MESSAGE_PAGE_SIZE = 100;
 
 const DEFAULT_FOLDERS = [{ id: "account1:/Inbox", name: "Inbox", role: "inbox" }];
 
+/** Minimal Blob/File stand-ins for the invitation attachment (web globals). */
+class FakeBlob {
+  constructor(parts = [], options = {}) {
+    this.parts = parts;
+    this.type = options.type || "";
+  }
+}
+
+class FakeFile extends FakeBlob {
+  constructor(parts = [], name = "", options = {}) {
+    super(parts, options);
+    this.name = name;
+  }
+}
+
 function normalizeFolder(spec) {
   return {
     id: spec.id,
@@ -115,6 +130,8 @@ function backgroundHarness(options = {}) {
   const updates = [];
   const continuedLists = [];
   const abortedLists = [];
+  const composeCalls = [];
+  let nextComposeTab = 0;
   const folders = new Map();
   for (const spec of options.folders || DEFAULT_FOLDERS) {
     const folder = normalizeFolder(spec);
@@ -231,6 +248,35 @@ function backgroundHarness(options = {}) {
       async list() {
         return options.identities || [];
       }
+    },
+    // Compose windows used by the invitation listener (and POST /messages).
+    // Every call is recorded in `composeCalls` so tests can assert the draft
+    // save / send flow without a real Thunderbird. Tests override single
+    // methods through the `messenger` option seam, e.g.
+    // { compose: { sendMessage: async () => ({ mode: "queued" }) } }.
+    compose: {
+      async beginNew(details) {
+        composeCalls.push({ method: "beginNew", details });
+        return { id: `compose-tab-${++nextComposeTab}` };
+      },
+      async addAttachment(tabId, attachment) {
+        composeCalls.push({ method: "addAttachment", tabId, attachment });
+      },
+      async saveMessage(tabId, options = {}) {
+        composeCalls.push({ method: "saveMessage", tabId, options });
+        return { mode: options.mode || "draft" };
+      },
+      async sendMessage(tabId, options = {}) {
+        composeCalls.push({ method: "sendMessage", tabId, options });
+        // Thunderbird reports the outcome of a sendNow as sent (or queued when
+        // the message is handed to the outgoing queue).
+        return { mode: options.mode === "sendNow" ? "sent" : "queued" };
+      }
+    },
+    tabs: {
+      async remove(tabId) {
+        composeCalls.push({ method: "removeTab", tabId });
+      }
     }
   };
 
@@ -252,7 +298,7 @@ function backgroundHarness(options = {}) {
     }
   };
 
-  const sandbox = { browser, messenger, console: silentConsole };
+  const sandbox = { browser, messenger, console: silentConsole, Blob: FakeBlob, File: FakeFile };
   if (options.clock) {
     // Production code that schedules work against Date.now()/setTimeout() can
     // be driven deterministically by passing the harness Clock.
@@ -272,6 +318,7 @@ function backgroundHarness(options = {}) {
 
   return {
     browser, context, events, messenger, messages, queries, updates, continuedLists, abortedLists, folders,
+    composeCalls,
     Email: context.Email, Utils: context.Utils, Contacts: context.Contacts,
     request,
     count: event => events.filter(([name]) => name === event).length
@@ -571,6 +618,39 @@ function createCalendarAttendee(spec = {}) {
   return { commonName: null, role: "REQ-PARTICIPANT", participationStatus: "NEEDS-ACTION", ...spec };
 }
 
+/**
+ * Minimal calIIcsSerializer: records the items and properties it receives and
+ * emits a small but valid VCALENDAR, so tests can assert that the item saved
+ * by addItem (and not the pre-save object) was serialized and that the UID in
+ * the ICS content is the event id.
+ */
+function createFakeIcsSerializer() {
+  return {
+    items: [],
+    properties: [],
+    addItems(items) {
+      this.items.push(...items);
+    },
+    addProperty(property) {
+      this.properties.push(property);
+    },
+    serializeToString() {
+      const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Test ICS serializer//EN"];
+      for (const property of this.properties) {
+        lines.push(`${property.propertyName}:${property.value}`);
+      }
+      for (const item of this.items) {
+        lines.push("BEGIN:VEVENT");
+        lines.push(`UID:${item.id}`);
+        lines.push(`SUMMARY:${item.title}`);
+        lines.push("END:VEVENT");
+      }
+      lines.push("END:VCALENDAR");
+      return lines.join("\r\n");
+    }
+  };
+}
+
 function createFakeCal(options = {}) {
   let uuidCounter = 0;
   // The calendar's default timezone is configurable so tests can prove that
@@ -689,6 +769,13 @@ function createFakeCal(options = {}) {
     },
     getUUID() {
       return `fake-uuid-${++uuidCounter}`;
+    },
+    // Thunderbird's ICS machinery (Task 5.4): createEvent builds the iTIP
+    // METHOD property through it and serializes the saved item.
+    icsService: {
+      createIcalProperty(propertyName) {
+        return { propertyName, value: null };
+      }
     }
   };
 }
@@ -729,7 +816,9 @@ function experimentHarness(options = {}) {
     nsIFolderListener: { event: 0x80 },
     calICalendar: { ITEM_FILTER_TYPE_EVENT: 0x1, ITEM_FILTER_CLASS_OCCURRENCES: 0x2 },
     calIEvent: {},
-    calIAttendee: {}
+    calIAttendee: {},
+    calIIcsSerializer: {},
+    nsIMsgIdentity: {}
   };
   const fixtures = folderSpecs.map(spec => {
     const fixture = { spec, listeners: [], updates: 0 };
@@ -782,6 +871,14 @@ function experimentHarness(options = {}) {
           // options.noRequestListener models a server that is reachable before
           // the background has registered its listener: onRequestFire stays null.
           if (this.name === "httpServer.onRequest" && options.noRequestListener) return;
+          // Likewise for invitations: options.noInvitationListener models a
+          // background that has not registered the listener yet, and
+          // options.invitationListener replaces the background's listener so a
+          // test can control the returned outcome (or make it throw).
+          if (this.name === "httpServer.onSendInvitation") {
+            if (options.noInvitationListener) return;
+            if (options.invitationListener) listener = options.invitationListener;
+          }
           this.register({
             async: payload => {
               // Observe experiment -> background dispatch so tests can assert that
@@ -848,11 +945,20 @@ function experimentHarness(options = {}) {
         return { cal };
       }
       if (name.endsWith("/MailServices.sys.mjs")) {
-        return options.mailServices || { MailServices: { mailSession } };
+        if (options.mailServices) return options.mailServices;
+        return {
+          MailServices: {
+            mailSession,
+            // The user's own identities, shared with background.js's
+            // messenger.identities.list().
+            accounts: { allIdentities: options.identities || [] }
+          }
+        };
       }
       throw new Error(`Unavailable module: ${name}`);
     }
   };
+  const icsSerializers = [];
   const Cc = {
     "@mozilla.org/process/environment;1": {
       getService() {
@@ -884,6 +990,13 @@ function experimentHarness(options = {}) {
     },
     "@mozilla.org/calendar/attendee;1": {
       createInstance() { return createCalendarAttendee(); }
+    },
+    "@mozilla.org/calendar/ics-serializer;1": {
+      createInstance() {
+        const serializer = createFakeIcsSerializer();
+        icsSerializers.push(serializer);
+        return serializer;
+      }
     }
   };
   const privileged = vm.createContext({
@@ -997,7 +1110,7 @@ function experimentHarness(options = {}) {
     messenger: background.messenger, messages: background.messages, queries: background.queries,
     updates: background.updates, folders: background.folders,
     continuedLists: background.continuedLists, abortedLists: background.abortedLists,
-    cal, mailSession, request,
+    cal, mailSession, request, composeCalls: background.composeCalls, icsSerializers,
     count: event => events.filter(([name]) => name === event).length
   };
 }

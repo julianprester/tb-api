@@ -387,7 +387,7 @@ test("calendar writes require exact matches; reads keep fuzzy matching", async t
     headers: json,
     body: JSON.stringify({ ...EVENT, calendar: "work" })
   });
-  assert.equal(created.status, 200);
+  assert.equal(created.status, 201);
   assert.equal(created.body.calendar, "Work");
   assert.equal(h.cal.manager.getCalendars()[1].items.length, 1);
 
