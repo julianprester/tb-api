@@ -20,8 +20,8 @@ people actually want first, and requires opt-in for sending invitations.
   `resolved_mailbox.matched_by`).
 - **Boolean filters are strict.** `read`/`unread`, `flagged`, `junk`, `refresh`
   and `include_preview` accept only `true`/`false`/`1`/`0`; any other value is
-  `400 invalid_filter` instead of being ignored, and contradictory
-  `read`/`unread` values are rejected too.
+  `400 invalid_filter` (`invalid_refresh` for `refresh`) instead of being
+  ignored, and contradictory `read`/`unread` values are rejected too.
 - **`GET /messages` is newest first.** The default order is `date_desc`; use
   `sort=date_asc` for the previous oldest-first order. Responses report an
   accurate `matched`/`has_more`, and long scans stop at a 20-second budget with
