@@ -589,7 +589,13 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
           if (!manager || typeof manager.get !== "function") return result;
           for (const id of messageIds || []) {
             try {
-              const msgHdr = manager.get(id);
+              // Thunderbird's MessageManager.get() indexes its tracker Map by
+              // integer id, while the schema delivers strings. A raw string
+              // lookup silently misses (Map keys are not coerced), so numeric
+              // ids are converted back before the lookup.
+              const trackerId =
+                typeof id === "string" && /^\d+$/.test(id.trim()) ? Number(id) : id;
+              const msgHdr = manager.get(trackerId);
               if (!msgHdr) continue;
               result[id] = {
                 answered: !!(msgHdr.flags & 0x2),

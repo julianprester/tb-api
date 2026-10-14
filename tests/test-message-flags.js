@@ -185,14 +185,17 @@ test("include_preview accepts boolean spellings and rejects unknown values", asy
 });
 
 test("answered/forwarded come from the experiment's Replied/Forwarded bits", async () => {
-  const flagsById = { 1: 0x2, 2: 0x1000, 3: 0x2 | 0x1000, 4: 0 };
+  // Thunderbird's MessageManager.get() indexes a Map by integer tracker id
+  // (MessageTracker assigns `id = this._nextId++`). Use a numeric-keyed Map so
+  // a string id cannot accidentally match, exactly like the real API.
+  const flagsById = new Map([[1, 0x2], [2, 0x1000], [3, 0x2 | 0x1000], [4, 0]]);
   const requested = [];
   const h = experimentHarness({
     messages: [makeMessage(1), makeMessage(2), makeMessage(3), makeMessage(4)],
     messageManager: {
       get(id) {
         requested.push(id);
-        return { flags: flagsById[id] ?? 0 };
+        return flagsById.has(id) ? { flags: flagsById.get(id) } : null;
       }
     }
   });
@@ -222,7 +225,7 @@ test("answered/forwarded come from the experiment's Replied/Forwarded bits", asy
 
   assert.equal(calls.length, 1, "one call carries the whole final page");
   assert.deepEqual(calls[0].slice().sort(), ["1", "2", "3", "4"]);
-  assert.deepEqual(requested.sort(), ["1", "2", "3", "4"], "the experiment reads string IDs");
+  assert.deepEqual(requested.sort(), [1, 2, 3, 4], "the experiment reads numeric tracker IDs");
 });
 
 test("answered/forwarded are omitted when the message manager is unavailable", async () => {
@@ -243,7 +246,7 @@ test("a throwing message manager lookup omits only that message's flags", async 
     messages: [makeMessage(1), makeMessage(2)],
     messageManager: {
       get(id) {
-        if (id === "1") throw new Error("message vanished");
+        if (id === 1) throw new Error("message vanished");
         return { flags: 0x2 };
       }
     }

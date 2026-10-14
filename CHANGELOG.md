@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1] - 2026-10-14
+
+### Fixed
+
+- `answered`/`forwarded` are reported again on Thunderbird 140: the
+  experiment's message-manager lookup indexed Thunderbird's tracker map with
+  the string IDs the schema delivers, so every lookup silently missed and the
+  flags were omitted. Numeric IDs are converted back to integers before the
+  lookup, and the harness fake now keys by number like the real API.
+
 ## [3.0] - 2026-10-14
 
 Version 3.0 makes writes fail loudly instead of guessing, returns the messages
