@@ -96,6 +96,36 @@ people actually want first, and requires opt-in for sending invitations.
 - Dead caches and stale helpers removed; live shell checks updated for auth,
   `Content-Type` and the new behaviour.
 
+### Review fixes
+
+- `PATCH /events/:id` validates `attendees` and its entries exactly like
+  `POST /events` before touching the stored event. A non-array is `400
+  invalid_parameter` and changes nothing, instead of wiping every attendee,
+  persisting the wipe and then failing with a 500; an empty array or `null`
+  still means "remove all".
+- `POST /contacts` auto-selects an address book only when exactly one writable
+  book exists. Several writable books without `addressbook` is `409
+  ambiguous_target` with the writable books in `matches`, never a list-order
+  guess.
+- Read responses report the target they resolved: `resolved_calendar` on
+  `GET /events` and `GET /upcoming`, `resolved_addressbook` on `GET /contacts`
+  (both `{id, name, matched_by}`), and the already-returned `resolved_mailbox`
+  on `POST /mailboxes/refresh` is now documented.
+- Honesty and safety hardening: a supplied-but-empty target
+  (`move_to: ""`, `mailbox=`, `calendar=`, `addressbook=`, `identity=`) is
+  `400 invalid_target`/`invalid_mailbox` instead of silently widening the
+  read or auto-selecting a target; `has_attachment` is omitted when the MIME
+  call fails instead of being reported `false`; the `502 update_failed`
+  wording says "no message was fully updated" (`updated`/`results` show what
+  partly applied); requested invitations without attendees return a warning;
+  a failed invitation preparation closes its compose tab; folder-event
+  handler failures are contained; an all-day start whose default end
+  overflows names the start instead of `"undefined"`.
+- Documentation: SECURITY.md lists 3.x, CONTRIBUTING.md includes
+  `test-comprehensive.sh` in the live checks, docker/README.md carries a
+  self-contained upgrade checklist, and Get Message documents that
+  digits-only references resolve as internal IDs.
+
 ## [2.7] - 2026-10-14
 
 ### Security
