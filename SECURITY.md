@@ -50,6 +50,7 @@ The API validates the HTTP Host header against known names to make DNS rebinding
 
 | Version | Supported          |
 | ------- | ------------------ |
+| 3.x     | :white_check_mark: |
 | 2.x     | :white_check_mark: |
 | < 2.0   | :x:                |
 

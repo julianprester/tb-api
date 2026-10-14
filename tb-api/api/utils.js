@@ -317,8 +317,7 @@ const ALIASES = {
     email: ["emailAddress", "email_address", "mail"],
     limit: ["max", "count", "size", "maxResults"],
   },
-  // Calendar events. Moved verbatim from normalizeCalendarParams in
-  // calendar.js; Task 2.5 wires calendar.js onto this table.
+  // Calendar events, used by calendar.js through Utils.normalizeParams.
   calendar: {
     calendar: ["calendarId", "calendar_id", "cal"],
     title: ["summary", "name", "eventName", "event_name"],

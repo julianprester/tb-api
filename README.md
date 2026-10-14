@@ -264,6 +264,11 @@ Returns full message content including body and attachments. The `message_id` is
 
 If the same Message-ID appears in several folders (for example an Inbox copy and an archived copy), the first match is returned and the response includes `matches`, the number of copies found. `matches` counts the copies in the first query page (Thunderbird returns one page per query); an internal numeric ID is looked up directly and reports `matches: 1`. To choose a specific copy, search by `mailbox` first and use the internal `id` from the result (a `mailbox` parameter for GET/PATCH is a planned follow-up). `PATCH` changes only the first match of a Message-ID.
 
+A digits-only reference (for example `123456`) is always resolved as an
+internal Thunderbird ID, so a Message-ID that consists only of digits is
+unreachable as a string; numeric-looking Message-IDs must contain `@` (for
+example `123456@example.com`).
+
 Example:
 ```bash
 curl "http://localhost:9595/messages/%3Cabc123%40example.com%3E"
@@ -353,7 +358,7 @@ Response shapes:
 |--------|------|
 | Every message updated/moved | `200 { "success": true, "updated": n, "moved": n, "results": [...] }` |
 | Some messages failed | `207 { "success": false, "partial": true, "updated": n, "moved": n, "not_found": [...], "results": [...] }` |
-| No message was changed | `502 { "error": "...", "code": "update_failed", "results": [...] }` |
+| No message was fully updated | `502 { "error": "...", "code": "update_failed", "updated": n, "moved": n, "results": [...] }` |
 
 `results` has one entry per resolved message: `{ "ref", "id", "updated", "moved", "error"? }` (`error` is present when the flag update or the move failed). Unresolved `ids` are listed in `not_found` and count as failures. The destination is resolved before any change, so a bad `move_to` returns `404`/`409` and nothing is updated.
 
@@ -812,7 +817,7 @@ without a `code`.
 | `invalid_refresh` | 400 | `refresh` is not `true`, `false`, `1`, or `0` |
 | `search_timeout` | 504 | The search produced no page within the 20-second budget |
 | `compose_failed` | 500 | `POST /messages` could not save the draft |
-| `update_failed` | 502 | `PATCH /messages` could not change any message |
+| `update_failed` | 502 | `PATCH /messages` fully updated no message; `updated`/`moved`/`results` show what partly applied |
 | `refresh_failed` | 500/502 | Folder refresh failed (500 when the call throws, 502 when Thunderbird reports a failed update) |
 | `refresh_timeout` | 504 | The caller deadline passed; the native update continues and later callers share it |
 | `refresh_stalled` | 504 | No completion signal within five minutes; the operation is abandoned |
@@ -874,7 +879,7 @@ Emitted by the HTTP layer before routing, so the request body may contain only
 | 409 | Ambiguous target (specify the calendar, folder, or occurrence) |
 | 415 | Unsupported Media Type (body without `Content-Type: application/json`) |
 | 500 | Internal server error |
-| 502 | Thunderbird's folder update failed, or `PATCH /messages` changed nothing |
+| 502 | Thunderbird's folder update failed, or `PATCH /messages` fully updated no message (see `updated`/`results`) |
 | 503 | Thunderbird offline, calendar unavailable, or refresh unavailable/stopped |
 | 504 | Request, search, or folder refresh exceeded the deadline |
 

@@ -12,8 +12,21 @@ The `Dockerfile` builds from a pinned base tag, `jlesage/thunderbird:v26.09.1`
 digest is recorded.
 
 Upgrading is a deliberate change: bump the `TB_IMAGE` tag (and the version noted
-here), run the integration checklist (Appendix B of the remediation plan), then
-release.
+here), then work through this checklist:
+
+1. Rebuild and restart the container (`docker compose build --no-cache &&
+   docker compose up -d`).
+2. Point the API at a **disposable account** (never a mailbox you care about)
+   before exercising writes.
+3. Run the live checks described in `CONTRIBUTING.md` against the container's
+   Thunderbird: `./tests/test-api.sh`, `./tests/test-write-api.sh` and
+   `./tests/test-comprehensive.sh`.
+4. Confirm `GET /` reports the version from `tb-api/manifest.json`, then
+   release.
+
+Docker/Thunderbird smoke checks (building, loading the extension, the live
+shell scripts) require a running container; the Node suite
+(`node --test tests/test-*.js`) runs without one.
 
 ## Quick Start
 

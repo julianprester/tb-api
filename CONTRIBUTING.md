@@ -71,6 +71,7 @@ Feature requests are welcome! Please:
    ```bash
    ./tests/test-api.sh
    ./tests/test-write-api.sh
+   ./tests/test-comprehensive.sh
    ```
 5. Commit with a clear message:
    ```bash
