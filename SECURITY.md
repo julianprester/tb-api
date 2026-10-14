@@ -35,7 +35,7 @@ The API does not emit a wildcard CORS header. A browser request is served only w
 export TB_API_ALLOWED_ORIGINS="https://app.example.com"
 ```
 
-Requests with a non-allowlisted `Origin`, and requests that look cross-site (`Sec-Fetch-Site: cross-site` or `same-site`) without an allowlisted origin, are rejected with `403` before authentication runs. Browser writes with a body must also send `Content-Type: application/json`, which blocks cross-site form posts that do not trigger a CORS preflight.
+Requests with a non-allowlisted `Origin`, and requests that look cross-site (`Sec-Fetch-Site: cross-site` or `same-site`) without an allowlisted origin, are rejected with `403` before authentication runs. Browser writes with a body must also send `Content-Type: application/json`, which blocks cross-site form posts that do not trigger a CORS preflight. These rejections carry the machine-readable codes `origin_not_allowed` and `cross_site_request`; a body sent without the JSON content type is `415` with `code: "unsupported_media_type"`. A CORS preflight (`OPTIONS`) is answered only for an allowlisted origin (204) and refused with `403` otherwise.
 
 ### Host Header Validation
 

@@ -10,8 +10,11 @@ Use when processing, searching, or drafting emails via the Thunderbird REST API.
 ## Quick Reference
 
 ```bash
-# Search inbox
+# Search inbox (newest first by default)
 curl -s "http://localhost:9595/messages?mailbox=inbox&limit=50"
+
+# Oldest first instead
+curl -s "http://localhost:9595/messages?mailbox=inbox&sort=date_asc"
 
 # Refresh the selected IMAP folder before searching (opt-in)
 curl -s --max-time 65 "http://localhost:9595/messages?mailbox=sent&refresh=true&after=yesterday"
@@ -47,20 +50,25 @@ curl -s "http://localhost:9595/mailboxes"
 
 # List identities (sender accounts)
 curl -s "http://localhost:9595/identities"
+
+# Events still left today
+curl -s "http://localhost:9595/upcoming"
 ```
 
 ## Key Points
 
-- **Date filters required for large mailboxes** - Without `after`/`before`, searches on archive/sent often timeout. Formats: `2024-01-15`, `today`, `yesterday`, `7 days ago`
+- **Date filters required for large mailboxes** - Without `after`/`before`, searches on archive/sent often timeout. Date-only values (`2024-01-15`) are local midnight; `today`, `yesterday`, `7 days ago`, `next monday` and ISO datetimes work too. Numeric short dates need a four-digit year and are day-first with `/` (`15/01/2024`) but month-first with `-` (`01-15-2024`); forms without a year such as `Jan 15` are rejected.
+- **Newest first** - `GET /messages` returns newest-first by default (`sort=date_desc`); `sort=date_asc` flips the order. `matched` is exact only when `complete` is true; when the 20-second scan budget expires the response has `complete: false`, `has_more: true` and a `warnings` entry. When a `mailbox` was given, `resolved_mailbox.matched_by` says whether it matched by `id`, `role`, `name`, or `fuzzy`.
 - **Read status** - List and single-message responses include boolean `read` (`false` means unread, not unknown). The `flags` array also contains `"read"` for read messages. Avoid `jq '.read // null'` or Python `message.get("read") or None`, which turn valid `false` into null. Older builds omitted the field; reload the updated extension. Getting message content does not mark it read.
 - **Attachments and message flags** - Search results include boolean `draft` (true in Drafts/Templates folders) and, with the default `include_preview=true`, `has_attachment` and a `preview`. `answered`/`forwarded` are reported when Thunderbird can read them; an absent value means unknown, not `false`. The `flags` array covers `read`, `flagged`, `junk`, `draft`, `answered`, `forwarded`.
 - **Cheap header-only listings** - `GET /messages?include_preview=false` omits `preview`/`has_attachment` and reads no message bodies. Use it to triage a large folder, then fetch full content only for the messages you keep.
 - **Message-IDs work with or without angle brackets** - `<abc123@example.com>`, `abc123@example.com` and surrounding spaces are equivalent (URL-encode `<`, `>`, `@` in GET paths). Prefer Message-IDs over internal numeric IDs; both are accepted for GET and PATCH. When a Message-ID appears in several folders, GET returns the first match plus a `matches` count, and PATCH changes only the first match.
 - **Batch updates are honest** - `PATCH /messages` applies flags first, then the move, and reports one `results` entry per message (`{ "ref", "id", "updated", "moved", "error"? }`). All messages succeeded → `200`; some failed → `207` with `success: false` and `partial: true`; none succeeded → `502 update_failed`. Unresolved `ids` are listed in `not_found`. Flag aliases include the inverse `unread`/`unseen` (`add_flags: ["unread"]` clears `read`); an unknown flag is a `400` that changes nothing.
 - **Drafts only** - `POST /messages` always saves as draft for safety; messages must be sent manually from Thunderbird
-- **Invitation drafts** - `POST /events` with `sendInvites: true` (or `inviteMode: "draft"`) saves an `invite.ics` invitation as a draft; nothing is sent. Sending immediately needs `inviteMode: "send"` **and** `TB_API_ALLOW_SEND=1` (otherwise `403 sending_disabled`, no event). The `organizer` must be one of your Thunderbird identities. `PATCH`/`DELETE` never send updates or cancellations.
+- **Invitation drafts** - `POST /events` with `sendInvites: true` (or `inviteMode: "draft"`) saves an `invite.ics` invitation as a draft; nothing is sent. Sending immediately needs `inviteMode: "send"` **and** `TB_API_ALLOW_SEND=1` (otherwise `403 sending_disabled`, no event). The `organizer` must be one of your Thunderbird identities. `PATCH`/`DELETE` never send updates or cancellations. A created event also reports `invitations: {"status": "draft_saved"|"sent"|"queued"|"failed", "error"?}`.
+- **Recurring events** - `GET /events` returns each occurrence with `occurrence: true` and a `recurrenceId`. Edit or delete one occurrence with `recurrenceId` (timed series use the UTC instant, all-day series the `YYYY-MM-DD` date), or the whole series with `scope: "series"`. Both together is `400`, and a recurring event without either is `409 ambiguous_recurrence`; an unknown occurrence is `404 occurrence_not_found`.
 - **Opt-in freshness** - Use `refresh=true` with a specific mailbox to sync IMAP headers before searching. Refresh failures return errors, not stale results. Local folders return an explicit no-op; root/virtual folders and other protocols are unsupported. `timeoutMs` defaults to 30000 (max 60000); this does not guarantee offline body downloads.
-- **Flexible parameters** - Most parameters accept aliases (e.g., `q`/`query`/`search`, `mailbox`/`folder`)
+- **Flexible parameters** - Most parameters accept aliases (e.g., `mailbox`/`folder`). Aliases are per endpoint: `q` means full text for `GET /messages` but the contact search for `GET /contacts` (`query`/`q`/`search` there).
 - **Fuzzy matching** - Calendar and address book names are fuzzy matched; errors include suggestions
 
 ## Available Endpoints
@@ -75,7 +83,8 @@ curl -s "http://localhost:9595/identities"
 | POST | /mailboxes/refresh | Refresh a concrete folder (mailbox required) |
 | GET | /identities | List sender identities |
 | GET | /calendars | List calendars |
-| GET | /events | List events |
+| GET | /events | List events (occurrences carry `recurrenceId`) |
+| GET | /upcoming | Events from now until end of today |
 | POST | /events | Create event |
 | PATCH | /events/:id | Update event |
 | DELETE | /events/:id | Delete event |
