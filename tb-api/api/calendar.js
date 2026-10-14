@@ -1055,8 +1055,29 @@ async function updateEvent(eventId, params, cal, Ci, Cc) {
       }
     }
 
-    // Update attendees if provided
+    // Update attendees if provided. Validate exactly like createEvent does
+    // BEFORE removeAllAttendees: a non-array used to wipe the attendees, then
+    // persist the attendee-less clone and only fail (500) when the response
+    // builder mapped the non-array. `null` and `[]` keep their documented
+    // "replaces all" meaning (remove every attendee).
     if (attendees !== undefined) {
+      if (attendees !== null && !Array.isArray(attendees)) {
+        return Utils.fail("invalid_parameter", "Attendees must be an array", 400, [
+          'Provide attendees as array: [{"email": "...", "name": "..."}, ...]',
+          'Or simplified: ["email1@example.com", "email2@example.com"]'
+        ]);
+      }
+      if (Array.isArray(attendees)) {
+        for (const att of attendees) {
+          const attEmail = typeof att === "string" ? att : (att && att.email);
+          if (!attEmail) {
+            return Utils.fail("invalid_parameter", "Each attendee must have an email address", 400, [
+              'Provide attendee as string "email@example.com" or object {"email": "...", "name": "..."}'
+            ]);
+          }
+        }
+      }
+
       // Remove all existing attendees first
       try {
         newEvent.removeAllAttendees();
@@ -1069,7 +1090,7 @@ async function updateEvent(eventId, params, cal, Ci, Cc) {
       }
       
       // Add new attendees (if not null/empty)
-      if (attendees && Array.isArray(attendees) && attendees.length > 0) {
+      if (attendees && attendees.length > 0) {
         for (const att of attendees) {
           const attendee = Cc["@mozilla.org/calendar/attendee;1"].createInstance(Ci.calIAttendee);
           

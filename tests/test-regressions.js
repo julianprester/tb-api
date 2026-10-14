@@ -214,3 +214,59 @@ test("Malformed JSON / bad % on /events → 400 (no hang, no pending leak)", asy
   assert.equal(invalidQuery.status, 400);
   assert.equal(h.instance.pendingRequests.size, 0);
 });
+
+// C1: PATCH /events/:id used to removeAllAttendees() first, persist the
+// attendee-less clone and only then fail (500) while building the response for
+// a non-array `attendees`. The input is now rejected up front, exactly like
+// createEvent does, with nothing modified.
+test("C1: PATCH attendees with a non-array is 400 invalid_parameter and changes nothing", async t => {
+  const h = experimentHarness({
+    t,
+    items: [{
+      id: "c1-event",
+      title: "Standup",
+      start: "2030-01-01T10:00:00",
+      end: "2030-01-01T11:00:00",
+      attendees: ["alice@example.test", "bob@example.test"]
+    }]
+  });
+  const calendar = h.cal.manager.getCalendars()[0];
+  const modifies = [];
+  const originalModify = calendar.modifyItem.bind(calendar);
+  calendar.modifyItem = async (newItem, oldItem) => {
+    modifies.push({ newItem, oldItem });
+    return originalModify(newItem, oldItem);
+  };
+
+  for (const attendees of ["alice@example.test", { email: "alice@example.test" }]) {
+    const result = await h.request("PATCH", "/events/c1-event", {
+      queryString: "calendar=test-calendar",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ attendees })
+    });
+    assert.equal(result.status, 400, JSON.stringify(attendees));
+    assert.equal(result.body.code, "invalid_parameter", JSON.stringify(attendees));
+    assert.match(result.body.error, /Attendees must be an array/);
+    assert.equal(modifies.length, 0, "nothing may be persisted");
+    assert.equal(calendar.items[0].getAttendees().length, 2, "attendees must still be two");
+  }
+
+  // The valid array form still replaces every attendee; null (like []) keeps
+  // the documented "replaces all" meaning of removing them.
+  const replaced = await h.request("PATCH", "/events/c1-event", {
+    queryString: "calendar=test-calendar",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ attendees: ["carol@example.test"] })
+  });
+  assert.equal(replaced.status, 200, JSON.stringify(replaced.body));
+  assert.equal(calendar.items[0].getAttendees().length, 1);
+  assert.equal(calendar.items[0].getAttendees()[0].id, "mailto:carol@example.test");
+
+  const removed = await h.request("PATCH", "/events/c1-event", {
+    queryString: "calendar=test-calendar",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ attendees: null })
+  });
+  assert.equal(removed.status, 200, JSON.stringify(removed.body));
+  assert.equal(calendar.items[0].getAttendees().length, 0);
+});
