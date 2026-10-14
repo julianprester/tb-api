@@ -111,7 +111,7 @@ test("3.3: move_to \"Archive 2023\" with only \"Archive 2022\" -> 404, nothing m
     move_to: "Archive 2023"
   }));
   assert.equal(patch.status, 404);
-  assert.equal(patch.body.code, "not_found");
+  assert.equal(patch.body.code, "folder_not_found");
   assert.equal(moved.length, 0, "a fuzzy destination must never move mail");
   assert.equal(h.messages[0].folder.id, "account1:/Inbox");
 });

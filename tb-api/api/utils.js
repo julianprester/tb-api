@@ -464,7 +464,8 @@ function didYouMean(input, candidates) {
  * 2. exact role, case-insensitive (mailboxes only)
  * 3. exact name, case-insensitive (exact email for identities)
  * 4. read mode only: fuzzy chain (prefix, contains, similarity) -> "fuzzy"
- * 5. nothing -> 404 not_found with didYouMean + the caller's hints
+ * 5. nothing -> 404 `folder_not_found` for mailboxes, `not_found` for every
+ *    other kind, with didYouMean + the caller's hints
  *
  * Several matches: read mode picks the first candidate (the caller reports
  * the choice, e.g. searchMessages's `resolved_mailbox`); write mode refuses
@@ -475,8 +476,8 @@ function didYouMean(input, candidates) {
  * does not need to know route names.
  *
  * Returns `{ id, name, matched_by: "id"|"role"|"name"|"fuzzy" }` or a
- * `Utils.fail` result (`invalid_target` 400, `not_found` 404,
- * `ambiguous_target` 409).
+ * `Utils.fail` result (`invalid_target` 400, `folder_not_found` 404 for
+ * mailboxes, `not_found` 404 otherwise, `ambiguous_target` 409).
  */
 function resolveTarget(kind, input, { mode = "read", candidates = [], hints = [] } = {}) {
   const labels = { mailbox: "Mailbox", calendar: "Calendar", addressbook: "Address book", identity: "Identity" };
@@ -552,8 +553,11 @@ function resolveTarget(kind, input, { mode = "read", candidates = [], hints = []
   }
 
   // 5. Nothing matched. Keep didYouMean, then list what is available.
+  // Mailbox misses keep the historical `folder_not_found` code (documented in
+  // Task 2.3 and declared stable by the README); all other kinds report the
+  // shared `not_found`.
   return fail(
-    "not_found",
+    kind === "mailbox" ? "folder_not_found" : "not_found",
     `${label} not found: "${input}"`,
     404,
     [

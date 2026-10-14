@@ -99,14 +99,15 @@ test("resolveTarget: fuzzy matching is read-only and reports matched_by fuzzy", 
   assert.deepEqual(read, { id: "account1:/Archive 2022", name: "Archive 2022", matched_by: "fuzzy" });
 
   // A write must refuse it instead of moving mail into the wrong folder.
+  // Mailbox misses keep the historical `folder_not_found` code (Task 2.3).
   const write = plain(Utils.resolveTarget("mailbox", "Archive 2023", { mode: "write", candidates: MAILBOXES }));
-  assert.equal(write.code, "not_found");
+  assert.equal(write.code, "folder_not_found");
   assert.equal(write.statusCode, 404);
   assert.match(write.suggestions[0], /Archive 2022/);
 
   // Fuzzy roles are read-only too.
   assert.equal(Utils.resolveTarget("mailbox", "sen", { candidates: MAILBOXES }).matched_by, "fuzzy");
-  assert.equal(Utils.resolveTarget("mailbox", "sen", { mode: "write", candidates: MAILBOXES }).code, "not_found");
+  assert.equal(Utils.resolveTarget("mailbox", "sen", { mode: "write", candidates: MAILBOXES }).code, "folder_not_found");
 });
 
 test("resolveTarget identity kind matches the email, never the display name", () => {
@@ -185,7 +186,7 @@ test("move_to: \"Archive 2023\" with only \"Archive 2022\" -> 404 and nothing mo
     move_to: "Archive 2023"
   }));
   assert.equal(patch.status, 404);
-  assert.equal(patch.body.code, "not_found");
+  assert.equal(patch.body.code, "folder_not_found", "mailbox misses keep the mailbox-specific code");
   assert.equal(moved.length, 0, "a fuzzy destination must never move mail");
   assert.equal(h.messages[0].folder.id, "account1:/Inbox");
 
