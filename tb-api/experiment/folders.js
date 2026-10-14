@@ -190,22 +190,29 @@ var FolderRefresher = class {
    * is therefore complete: the update finished after the request was made.
    */
   handleFolderEvent(folder, event) {
-    if (event !== "FolderLoaded" || !folder) return;
-    const uri = folder.URI;
-    if (typeof uri !== "string" || !uri) return;
-    const operation = this.inFlight.get(uri);
-    if (!operation || operation.done) return;
-    // Events are delivered synchronously, so an event that happened before the
-    // request could not reach this handler afterwards. The explicit check also
-    // rejects an event observed at a time earlier than the operation started.
-    const eventAt = Date.now();
-    if (operation.startedAt > eventAt) return;
-    this.complete(operation, {
-      mailbox: operation.mailbox,
-      refreshed: true,
-      via: "folder_loaded",
-      elapsed_ms: eventAt - operation.startedAt
-    });
+    // Thunderbird dispatches folder events synchronously; a throwing property
+    // access (a folder proxy that went away mid-update) must never escape
+    // into its dispatch loop (M17).
+    try {
+      if (event !== "FolderLoaded" || !folder) return;
+      const uri = folder.URI;
+      if (typeof uri !== "string" || !uri) return;
+      const operation = this.inFlight.get(uri);
+      if (!operation || operation.done) return;
+      // Events are delivered synchronously, so an event that happened before the
+      // request could not reach this handler afterwards. The explicit check also
+      // rejects an event observed at a time earlier than the operation started.
+      const eventAt = Date.now();
+      if (operation.startedAt > eventAt) return;
+      this.complete(operation, {
+        mailbox: operation.mailbox,
+        refreshed: true,
+        via: "folder_loaded",
+        elapsed_ms: eventAt - operation.startedAt
+      });
+    } catch (e) {
+      console.warn("[tb-api] Ignoring a folder event that could not be handled:", e);
+    }
   }
 
   waitFor(operation, timeoutMs) {

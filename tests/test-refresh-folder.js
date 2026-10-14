@@ -114,6 +114,21 @@ test("FolderLoaded events for other folders or event names are ignored", async t
   assert.equal((await pending).refreshed, true);
 });
 
+test("a throwing folder-event property access is contained (M17)", async t => {
+  const h = experimentHarness({ t });
+  const pending = h.api.refreshFolder("account1:/Inbox", 60000);
+  await flush();
+  assert.equal(h.mailSession.listeners.size, 1);
+
+  // Thunderbird dispatches folder events synchronously; a property access
+  // that throws must not escape into its dispatch loop.
+  const hostile = { get URI() { throw new Error("synthetic property failure"); } };
+  assert.doesNotThrow(() => h.mailSession.emitFolderEvent(hostile, "FolderLoaded"));
+
+  h.fixtures[0].finish();
+  assert.equal((await pending).refreshed, true, "the refresh still completes via its URL listener");
+});
+
 test("a FolderLoaded that predates the request does not complete it", async t => {
   const h = experimentHarness({ t });
   const native = h.fixtures[0].native;
