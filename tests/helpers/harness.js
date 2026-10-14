@@ -556,6 +556,8 @@ function createCalendarItem(spec = {}) {
       copy._properties = { ...this._properties };
       copy._attendees = [...this._attendees];
       copy.recurrenceInfo = this.recurrenceInfo?.clone?.() || this.recurrenceInfo;
+      // Occurrences inherit from the parent they end up attached to.
+      if (copy.recurrenceInfo) copy.recurrenceInfo.parentItem = copy;
       return copy;
     }
   };
