@@ -1,4 +1,4 @@
-/* global ChromeUtils, Services, Ci, Components */
+/* global ChromeUtils, Services, Ci, Components, MailServices */
 "use strict";
 
 var { setTimeout, clearTimeout } = ChromeUtils.importESModule(
@@ -16,6 +16,24 @@ try {
   console.warn("[tb-api] Native folder-ID resolution is not available:", e);
 }
 
+// An update that never reports back must not pin its operation in flight
+// forever: every later refresh of that folder would join the dead operation
+// and time out. Five minutes is far beyond a normal IMAP update.
+const MAX_OPERATION_MS = 5 * 60 * 1000;
+
+// The mail session delivers folder events (Appendix A.3). api.js injects
+// MailServices through the shared experiment scope; older Thunderbird versions
+// and unit tests may omit it, in which case the per-request nsIUrlListener
+// remains the only completion signal.
+var mailSession = null;
+try {
+  if (typeof MailServices !== "undefined" && MailServices) {
+    mailSession = MailServices.mailSession || null;
+  }
+} catch (e) {
+  console.warn("[tb-api] Folder events are not available:", e);
+}
+
 function refreshError(code, message, statusCode = 400) {
   return { error: message, code, statusCode };
 }
@@ -28,6 +46,13 @@ var FolderRefresher = class {
   constructor() {
     this.inFlight = new Map();
     this.closed = false;
+    this.folderListenerRegistered = false;
+    // One session-wide listener covers every folder. It is registered lazily
+    // because most installations never refresh a folder at all.
+    this.folderListener = {
+      QueryInterface: ChromeUtils.generateQI(["nsIFolderListener"]),
+      onFolderEvent: (folder, event) => this.handleFolderEvent(folder, event)
+    };
   }
 
   async refreshFolder(folderId, timeoutMs = 30000) {
@@ -84,6 +109,10 @@ var FolderRefresher = class {
       return refreshError("refresh_unavailable", "The IMAP folder refresh interface is not available", 503);
     }
 
+    // From here on a native update may actually be issued, so folder events
+    // become relevant. Registration failure is non-fatal.
+    this.ensureFolderListener();
+
     let operation = this.inFlight.get(folder.URI);
     if (!operation) {
       operation = {
@@ -92,9 +121,18 @@ var FolderRefresher = class {
         startedAt: Date.now(),
         waiters: new Set(),
         done: false,
-        result: null
+        result: null,
+        ceiling: null
       };
       this.inFlight.set(operation.key, operation);
+
+      operation.ceiling = setTimeout(() => {
+        this.complete(operation, refreshError(
+          "refresh_stalled",
+          `Refresh of "${operation.mailbox}" did not report completion within ${MAX_OPERATION_MS / 60000} minutes`,
+          504
+        ));
+      }, MAX_OPERATION_MS);
 
       const listener = {
         QueryInterface: ChromeUtils.generateQI(["nsIUrlListener"]),
@@ -129,6 +167,47 @@ var FolderRefresher = class {
     return { ...result, folder_id: folderId };
   }
 
+  /**
+   * Subscribe to session-wide folder events the first time a refresh is about
+   * to issue a native update. Missing MailServices, a session that refuses the
+   * listener, or an older Thunderbird must all leave refresh working through
+   * the per-request nsIUrlListener.
+   */
+  ensureFolderListener() {
+    if (this.folderListenerRegistered || this.closed || !mailSession) return;
+    try {
+      mailSession.AddFolderListener(this.folderListener, Ci.nsIFolderListener.event);
+      this.folderListenerRegistered = true;
+    } catch (e) {
+      console.warn("[tb-api] Could not subscribe to folder events:", e);
+    }
+  }
+
+  /**
+   * Thunderbird drops the listener passed to updateFolderWithListener when a
+   * URL is already running, but it still announces kFolderLoaded when that
+   * update finishes (Appendix A.3). An operation that started before the event
+   * is therefore complete: the update finished after the request was made.
+   */
+  handleFolderEvent(folder, event) {
+    if (event !== "FolderLoaded" || !folder) return;
+    const uri = folder.URI;
+    if (typeof uri !== "string" || !uri) return;
+    const operation = this.inFlight.get(uri);
+    if (!operation || operation.done) return;
+    // Events are delivered synchronously, so an event that happened before the
+    // request could not reach this handler afterwards. The explicit check also
+    // rejects an event observed at a time earlier than the operation started.
+    const eventAt = Date.now();
+    if (operation.startedAt > eventAt) return;
+    this.complete(operation, {
+      mailbox: operation.mailbox,
+      refreshed: true,
+      via: "folder_loaded",
+      elapsed_ms: eventAt - operation.startedAt
+    });
+  }
+
   waitFor(operation, timeoutMs) {
     if (operation.done) return Promise.resolve(operation.result);
 
@@ -154,6 +233,13 @@ var FolderRefresher = class {
     if (operation.done) return;
     operation.done = true;
     operation.result = result;
+    // Clearing the ceiling here covers every completion path, including
+    // cancelAll()/close() and the caller timeouts that keep the operation
+    // alive for other waiters.
+    if (operation.ceiling !== null) {
+      clearTimeout(operation.ceiling);
+      operation.ceiling = null;
+    }
     if (this.inFlight.get(operation.key) === operation) {
       this.inFlight.delete(operation.key);
     }
@@ -169,5 +255,14 @@ var FolderRefresher = class {
   close() {
     this.closed = true;
     this.cancelAll();
+    if (this.folderListenerRegistered) {
+      // Clear the flag first so a second close cannot remove twice.
+      this.folderListenerRegistered = false;
+      try {
+        mailSession.RemoveFolderListener(this.folderListener);
+      } catch (e) {
+        console.warn("[tb-api] Could not remove the folder listener:", e);
+      }
+    }
   }
 };

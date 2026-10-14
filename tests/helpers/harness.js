@@ -539,17 +539,20 @@ function createFakeCal(options = {}) {
 
 function createFakeMailSession() {
   const listeners = new Map();
+  const removed = [];
   return {
     listeners,
+    removed,
     AddFolderListener(listener, flags) {
       listeners.set(listener, flags);
     },
     RemoveFolderListener(listener) {
       listeners.delete(listener);
+      removed.push(listener);
     },
     // Test helper: emit a folder event to every registered listener.
     emitFolderEvent(folder, event) {
-      for (const listener of listeners.keys()) listener.onFolderEvent(folder, event);
+      for (const listener of [...listeners.keys()]) listener.onFolderEvent(folder, event);
     }
   };
 }
@@ -744,6 +747,9 @@ function experimentHarness(options = {}) {
       instance.close();
       assert.equal(clock.timers.size, 0, "shutdown must clean up all caller timers");
       assert.equal(instance.folderRefresher.inFlight.size, 0);
+      if (mailSession.listeners) {
+        assert.equal(mailSession.listeners.size, 0, "shutdown must remove the folder listener");
+      }
     });
   }
 

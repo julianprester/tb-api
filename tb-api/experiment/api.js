@@ -11,6 +11,19 @@ var { setTimeout, clearTimeout } = ChromeUtils.importESModule(
   "resource://gre/modules/Timer.sys.mjs"
 );
 
+// MailServices.mailSession delivers folder events, the second completion
+// signal used by experiment/folders.js. The module is missing on older
+// Thunderbird versions; folder refresh then relies on the per-request URL
+// listener alone.
+var MailServices = null;
+try {
+  ({ MailServices } = ChromeUtils.importESModule(
+    "resource:///modules/MailServices.sys.mjs"
+  ));
+} catch (e) {
+  console.warn("[tb-api] MailServices is not available; folder events are disabled:", e);
+}
+
 // Maximum time a request may stay unanswered before the watchdog replies 504.
 // Above the 60 s refresh maximum plus the 20 s email-search budget.
 const REQUEST_TIMEOUT_MS = 120000;
@@ -99,7 +112,7 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
     context.callOnClose(self);
 
     if (!self.folderRefresher) {
-      const folderScope = { Services, Ci, Components, ChromeUtils, console };
+      const folderScope = { Services, Ci, Components, ChromeUtils, console, MailServices };
       Services.scriptloader.loadSubScript(
         context.extension.rootURI.resolve("experiment/folders.js"),
         folderScope

@@ -77,6 +77,141 @@ test("different folders refresh independently", async t => {
   assert.equal((await first).refreshed, true);
 });
 
+test("a busy folder completes on FolderLoaded when the update drops our listener", async t => {
+  const h = experimentHarness({ t });
+  const first = h.api.refreshFolder("account1:/Inbox", 60000);
+  const second = h.api.refreshFolder("account1:/Inbox", 60000);
+  await flush();
+  assert.equal(h.count("native-update"), 1);
+  // One session-wide listener, subscribed to folder events only.
+  assert.equal(h.mailSession.listeners.size, 1);
+  assert.deepEqual([...h.mailSession.listeners.values()], [0x80]);
+
+  // Thunderbird's already-running URL never calls OnStopRunningUrl on us.
+  h.mailSession.emitFolderEvent(h.fixtures[0].native, "FolderLoaded");
+  const results = await Promise.all([first, second]);
+  for (const result of results) {
+    assert.equal(result.refreshed, true);
+    assert.equal(result.via, "folder_loaded");
+    assert.equal(result.mailbox, "Inbox");
+  }
+  assert.equal(h.instance.folderRefresher.inFlight.size, 0);
+  assert.equal(h.clock.timers.size, 0, "the FolderLoaded completion clears the ceiling");
+});
+
+test("FolderLoaded events for other folders or event names are ignored", async t => {
+  const h = experimentHarness({ t, folders: [{ id: "one" }, { id: "two" }] });
+  const pending = h.api.refreshFolder("one", 60000);
+  await flush();
+  h.mailSession.emitFolderEvent(h.fixtures[1].native, "FolderLoaded");
+  h.mailSession.emitFolderEvent(h.fixtures[0].native, "FolderDeleted");
+  let settled = false;
+  pending.then(() => { settled = true; });
+  await flush();
+  assert.equal(settled, false);
+  assert.equal(h.instance.folderRefresher.inFlight.size, 1);
+  h.fixtures[0].finish();
+  assert.equal((await pending).refreshed, true);
+});
+
+test("a FolderLoaded that predates the request does not complete it", async t => {
+  const h = experimentHarness({ t });
+  const native = h.fixtures[0].native;
+  // The update finished before the request: nothing was in flight, so the
+  // event is dropped and the later request cannot inherit it.
+  h.mailSession.emitFolderEvent(native, "FolderLoaded");
+  const pending = h.api.refreshFolder("account1:/Inbox", 60000);
+  await flush();
+  assert.equal(h.instance.folderRefresher.inFlight.size, 1,
+    "a stale FolderLoaded must not settle the new operation");
+
+  // Started-after guard: an event observed at a time before the operation
+  // began must be ignored even though its URI matches.
+  h.clock.now -= 1;
+  h.mailSession.emitFolderEvent(native, "FolderLoaded");
+  h.clock.now += 1;
+  assert.equal(h.instance.folderRefresher.inFlight.size, 1);
+
+  // Only the update this request started (its URL listener) completes it.
+  h.fixtures[0].finish();
+  const result = await pending;
+  assert.equal(result.refreshed, true);
+  assert.equal(result.via, undefined);
+});
+
+test("an update that never reports back stalls after five minutes and frees the folder", async t => {
+  const h = experimentHarness({ t, folders: [{ id: "busy" }] });
+  const first = h.api.refreshFolder("busy", 1000);
+  h.clock.tick(1000);
+  assert.equal((await first).code, "refresh_timeout");
+  assert.equal(h.instance.folderRefresher.inFlight.size, 1);
+
+  // A later caller whose deadline overlaps the ceiling observes the stall.
+  h.clock.tick(300000 - 1000 - 1000);
+  const second = h.api.refreshFolder("busy", 60000);
+  h.clock.tick(2000);
+  const stalled = await second;
+  assert.equal(stalled.code, "refresh_stalled");
+  assert.equal(stalled.statusCode, 504);
+  assert.match(stalled.error, /"busy" did not report completion/);
+  assert.equal(h.fixtures[0].updates, 1, "a stalled operation is not restarted implicitly");
+
+  // The stalled operation left inFlight: the next refresh starts a new native
+  // update, and a late OnStopRunningUrl from the abandoned one is ignored.
+  assert.equal(h.instance.folderRefresher.inFlight.size, 0);
+  const retry = h.api.refreshFolder("busy", 60000);
+  assert.equal(h.fixtures[0].updates, 2);
+  h.fixtures[0].finish(0x80004005, 0);
+  assert.equal(h.instance.folderRefresher.inFlight.size, 1);
+  h.fixtures[0].finish();
+  assert.equal((await retry).refreshed, true);
+  assert.equal(h.clock.timers.size, 0);
+});
+
+test("closing removes the session folder listener and clears the ceiling", async t => {
+  const h = experimentHarness({ t });
+  const pending = h.api.refreshFolder("account1:/Inbox");
+  await flush();
+  assert.equal(h.mailSession.listeners.size, 1);
+  assert.equal(h.clock.timers.size, 2, "the caller deadline and the ceiling are pending");
+
+  h.instance.close();
+  assert.equal((await pending).code, "refresh_cancelled");
+  assert.equal(h.mailSession.listeners.size, 0);
+  assert.equal(h.mailSession.removed.length, 1);
+  assert.equal(h.clock.timers.size, 0);
+
+  // A second close must not remove the listener twice.
+  h.instance.close();
+  assert.equal(h.mailSession.removed.length, 1);
+
+  // Late folder events cannot resurrect a closed refresher.
+  h.mailSession.emitFolderEvent(h.fixtures[0].native, "FolderLoaded");
+  assert.equal(h.instance.folderRefresher.inFlight.size, 0);
+});
+
+test("refresh still completes without MailServices or a usable folder listener", async t => {
+  const noMailServices = experimentHarness({ t, mailServices: {} });
+  const first = noMailServices.api.refreshFolder("account1:/Inbox", 60000);
+  await flush();
+  assert.equal(noMailServices.mailSession.listeners.size, 0);
+  noMailServices.fixtures[0].finish();
+  assert.equal((await first).refreshed, true);
+
+  const registrationFails = experimentHarness({
+    t,
+    mailSession: {
+      AddFolderListener() { throw new Error("synthetic registration failure"); },
+      RemoveFolderListener() { throw new Error("synthetic removal failure"); }
+    }
+  });
+  const second = registrationFails.api.refreshFolder("account1:/Inbox", 60000);
+  await flush();
+  registrationFails.fixtures[0].finish();
+  assert.equal((await second).refreshed, true);
+  registrationFails.instance.close();
+});
+
 test("each caller has its own timeout without cancelling a shared update", async t => {
   const h = experimentHarness({ t });
   const first = h.api.refreshFolder("account1:/Inbox", 5);
@@ -86,7 +221,7 @@ test("each caller has its own timeout without cancelling a shared update", async
   assert.equal(timeout.code, "refresh_timeout");
   assert.equal(timeout.statusCode, 504);
   assert.equal(h.instance.folderRefresher.inFlight.size, 1);
-  assert.equal(h.clock.timers.size, 1);
+  assert.equal(h.clock.timers.size, 2, "the shared caller deadline and the operation ceiling remain");
   h.fixtures[0].finish();
   assert.equal((await second).refreshed, true);
   assert.equal(h.count("native-update"), 1);

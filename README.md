@@ -115,6 +115,14 @@ caller deadlines. A timeout returns `504`; it does not cancel Thunderbird's netw
 operation. Until that operation completes, retries share it rather than start another
 update. Stopping the API or unloading the extension clears its waiting state.
 
+A refresh succeeds when an update of that folder finishes after the request was made.
+Thunderbird may already be updating the folder (for example when the folder was just
+opened in the UI); it then drops the update listener handed to it, but still announces
+`FolderLoaded` when the running update finishes, and the request completes with
+`"via": "folder_loaded"`. If neither signal arrives within five minutes, the operation
+is abandoned with `504 refresh_stalled` so it cannot block later refreshes; the next
+request starts a new update.
+
 Refresh synchronizes folder state and message headers, not necessarily offline copies
 of message bodies. Normal Thunderbird update behavior, including configured incoming
 mail filters, can run.
@@ -580,7 +588,8 @@ recommend a fix.
 | 504 | Request or folder refresh exceeded the deadline |
 
 Folder-refresh errors additionally use machine-readable codes such as
-`refresh_timeout`, `thunderbird_offline`, or `unsupported_folder`.
+`refresh_timeout`, `refresh_stalled`, `thunderbird_offline`, or
+`unsupported_folder`.
 
 ---
 
