@@ -387,7 +387,7 @@ curl "http://localhost:9595/events?start=today&end=next+week"
 curl "http://localhost:9595/events?calendar=Work&start=2024-01-01"
 ```
 
-Every parameter also accepts its `snake_case` spelling (`start_date`,
+Most parameters also accept their `snake_case` spelling (`start_date`,
 `calendar_id`, `end_time`, ...); `start`/`end` accept the full
 [date grammar](#date-and-time-formats).
 
@@ -636,9 +636,9 @@ DELETE /contacts/:id
 
 ## Date and Time Formats
 
-Every `after`/`before` (email), `start`/`end` (events) and `recurrenceId`
-value is parsed by the same grammar. The `suggestions` array of an
-`invalid_date` error lists only examples that parse.
+Every `after`/`before` (email) and `start`/`end` (events) value is parsed by
+the same grammar. The `suggestions` array of a date parse error lists only
+examples that parse.
 
 | Form | Meaning |
 |------|---------|
