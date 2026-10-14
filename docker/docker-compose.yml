@@ -10,21 +10,23 @@ services:
       - TZ=Australia/Sydney
       - DISPLAY_WIDTH=1920
       - DISPLAY_HEIGHT=1080
-      - TB_API_TOKEN=${TB_API_TOKEN:-}
+      - TB_API_TOKEN=${TB_API_TOKEN:?Set TB_API_TOKEN (e.g. openssl rand -hex 32) in docker/.env}
       - TB_API_HOST=0.0.0.0
       - TB_API_HOSTS=thunderbird
+      - TB_API_ALLOWED_ORIGINS=${TB_API_ALLOWED_ORIGINS:-}
+      - VNC_PASSWORD=${VNC_PASSWORD:-}
       - KEEP_APP_RUNNING=1
     ports:
-      - "5800:5800"
-      - "5900:5900"
-      - "9595:9595"
+      # Published on the Docker host only; other containers reach the API at
+      # http://thunderbird:9595 over the shared Docker network.
+      - "127.0.0.1:5800:5800"
+      - "127.0.0.1:5900:5900"
+      - "127.0.0.1:9595:9595"
     volumes:
       - thunderbird_config:/config
-    networks:
-      - ocpa-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9595/"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null --header \"Authorization: Bearer $$TB_API_TOKEN\" http://127.0.0.1:9595/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -32,7 +34,3 @@ services:
 
 volumes:
   thunderbird_config:
-
-networks:
-  ocpa-network:
-    external: true

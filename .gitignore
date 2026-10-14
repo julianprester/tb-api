@@ -18,3 +18,7 @@ node_modules/
 # Python
 __pycache__/
 *.pyc
+
+# Local environment (secrets)
+.env
+docker/.env
