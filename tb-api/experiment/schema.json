@@ -106,7 +106,8 @@
               "subject": { "type": "string" },
               "icsContent": { "type": "string" },
               "organizerEmail": { "type": "string" },
-              "eventTitle": { "type": "string" }
+              "eventTitle": { "type": "string" },
+              "mode": { "type": "string" }
             }
           }
         ]

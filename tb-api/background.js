@@ -37,7 +37,7 @@ async function handleRequest(request) {
           calendar: {
             "GET /calendars": "List all calendars",
             "GET /events": "List events. Params: calendar (optional), start (default: now), end (default: +30 days). Returns organizer/attendees if present.",
-            "POST /events": "Create event. Params: title, start, end, calendar, location, description, organizer, attendees, sendInvites (bool: send invitation emails)",
+            "POST /events": "Create event (201 Created). Params: title, start, end, calendar, location, description, organizer (must be one of your identities), attendees, sendInvites (strict boolean alias for inviteMode=draft), inviteMode (draft default, or send with TB_API_ALLOW_SEND=1). Response carries invitations: {status: draft_saved|sent|queued|failed, error?} when invitations were requested",
             "PATCH /events/:id": "Update event. Params: calendar (required), title, start, end, location, description, organizer, attendees (replaces all)",
             "DELETE /events/:id": "Delete event. Params: calendar (required)"
           },
@@ -138,22 +138,28 @@ browser.httpServer.onRequest.addListener(async (request) => {
   browser.httpServer.sendResponse(request.id, response.statusCode, response.body);
 });
 
-// Listen for invitation sending requests from experiment
+// Listen for invitation sending requests from experiment. The listener
+// returns its outcome ({ status: "draft_saved" | "sent" | "queued" |
+// "failed", error? }); the experiment awaits it and reports it in the
+// POST /events response. The invitation is always a compose-based mail with
+// invite.ics attached (native iMIP is deliberately out of scope).
 browser.httpServer.onSendInvitation.addListener(async (invitation) => {
-  console.log(`[tb-api] Sending calendar invitations for: ${invitation.eventTitle}`);
+  console.log(`[tb-api] Preparing calendar invitation for: ${invitation.eventTitle}`);
   
   try {
-    // Find an identity to send from (prefer one matching organizer email)
+    // Find the identity matching the organizer. The experiment validates this
+    // already; never fall back to a different account (the old identities[0]
+    // fallback silently sent from the wrong address).
     const identities = await messenger.identities.list();
-    let sendIdentity = identities.find(id => id.email === invitation.organizerEmail);
-    if (!sendIdentity && identities.length > 0) {
-      sendIdentity = identities[0];
-      console.log(`[tb-api] Organizer email ${invitation.organizerEmail} not found in identities, using ${sendIdentity.email}`);
-    }
-    
+    const organizerEmail = String(invitation.organizerEmail || "").toLowerCase();
+    const sendIdentity = identities.find(id =>
+      id.email && String(id.email).toLowerCase() === organizerEmail
+    );
     if (!sendIdentity) {
-      console.error("[tb-api] No email identity available to send invitations");
-      return;
+      return {
+        status: "failed",
+        error: `No identity matches organizer ${invitation.organizerEmail}`
+      };
     }
 
     // Create the invitation email body
@@ -185,16 +191,22 @@ This invitation was sent via Thunderbird REST API.`;
       name: "invite.ics"
     });
 
-    // Send the message
-    const sendResult = await messenger.compose.sendMessage(tab.id, { mode: "sendNow" });
-    
-    if (sendResult.mode === "sendNow") {
-      console.log(`[tb-api] Invitation emails sent to: ${invitation.recipients.join(", ")}`);
-    } else {
-      console.log(`[tb-api] Invitation email queued (mode: ${sendResult.mode})`);
+    // Draft mode (default): save the compose window as a draft and close it,
+    // exactly like POST /messages does.
+    if (invitation.mode !== "send") {
+      await messenger.compose.saveMessage(tab.id, { mode: "draft" });
+      await messenger.tabs.remove(tab.id);
+      return { status: "draft_saved" };
     }
+
+    // Send mode: send now and map what Thunderbird reports (sent/queued).
+    const sendResult = await messenger.compose.sendMessage(tab.id, { mode: "sendNow" });
+    const status = sendResult && sendResult.mode === "queued" ? "queued" : "sent";
+    console.log(`[tb-api] Invitation email ${status} to: ${invitation.recipients.join(", ")}`);
+    return { status };
   } catch (e) {
-    console.error("[tb-api] Failed to send invitation emails:", e);
+    console.error("[tb-api] Failed to prepare invitation email:", e);
+    return { status: "failed", error: e.message };
   }
 });
 

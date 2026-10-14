@@ -130,7 +130,9 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
 
     // Import calendar module. utils.js is loaded into the same scope first so
     // calendar.js can share the background's parameter parsing helpers.
-    const calendarScope = {};
+    // MailServices is shared so createEvent can validate the organizer against
+    // the user's own identities (D8).
+    const calendarScope = { MailServices };
     Services.scriptloader.loadSubScript(
       context.extension.rootURI.resolve("api/utils.js"),
       calendarScope
@@ -276,12 +278,8 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
      * the HTTP status but is not serialized into the JSON body.
      */
     function sendCalendarResponse(requestId, result) {
-      if (!result.error) {
-        sendJsonResponse(requestId, result, 200);
-        return;
-      }
       const { statusCode, ...body } = result;
-      sendJsonResponse(requestId, body, statusCode || 400);
+      sendJsonResponse(requestId, body, statusCode || (result.error ? 400 : 200));
     }
 
     /**
@@ -314,29 +312,34 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
         // POST /events
         if (path === "/events" && method === "POST") {
           const result = await calendar.createEvent(params, cal, Ci, Cc);
-          
-          // Check if invitations need to be sent
-          if (result._invitationData && onSendInvitationFire) {
-            const invData = result._invitationData;
-            // Fire event for background script to send invitations
-            onSendInvitationFire.async({
-              recipients: invData.recipients,
-              subject: invData.subject,
-              icsContent: invData.icsContent,
-              organizerEmail: invData.organizerEmail,
-              eventTitle: result.title
-            });
-            // Update response to indicate invites are being sent
+
+          // The background prepares or sends the invitation. `fire.async()`
+          // resolves to the listener's outcome (Appendix A.5), so the response
+          // reports the real status instead of assuming the invite was sent.
+          if (result._invitationData) {
+            const { mode, ...invitation } = result._invitationData;
             delete result._invitationData;
-            result.invitesSent = true;
-            delete result.invitesPending;
-          } else if (result._invitationData) {
-            // No listener registered
-            delete result._invitationData;
-            result.warning = "Invitation sending not available (no listener)";
-            delete result.invitesPending;
+            if (onSendInvitationFire) {
+              try {
+                const outcome = await onSendInvitationFire.async({ ...invitation, mode });
+                result.invitations = outcome && typeof outcome.status === "string"
+                  ? outcome
+                  : { status: "failed", error: "background returned no invitation outcome" };
+              } catch (e) {
+                // A listener that throws or rejects must not fail the created
+                // event: report the invitation outcome instead.
+                result.invitations = { status: "failed", error: e.message };
+              }
+            } else {
+              // The event exists by now: this is a success with a warning, not
+              // an error response.
+              result.invitations = { status: "failed", error: "background not ready" };
+              result.warning = "Invitations were not prepared: background not ready";
+            }
           }
-          
+
+          // The event was created (POST is not an error): 201 Created.
+          if (!result.error) result.statusCode = 201;
           sendCalendarResponse(requestId, result);
           return;
         }
