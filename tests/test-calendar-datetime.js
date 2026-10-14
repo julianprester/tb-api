@@ -247,6 +247,14 @@ test("allDay create refuses relative, timed and impossible dates", async t => {
     assert.equal(h.cal.manager.getCalendars()[0].items.length, 0, label);
   }
 
+  // M12: when the omitted end overflows start + 1 day, the message names the
+  // start instead of reporting "undefined".
+  const overflow = await create(h, { title: "E", start: "9999-12-31", allDay: true });
+  assert.equal(overflow.status, 400);
+  assert.equal(overflow.body.code, "invalid_date");
+  assert.match(overflow.body.error, /9999-12-31 \+ 1 day/);
+  assert.doesNotMatch(overflow.body.error, /undefined/);
+
   // A missing start keeps the existing invalid_parameter contract.
   const missing = await create(h, { title: "E", allDay: true });
   assert.equal(missing.status, 400);

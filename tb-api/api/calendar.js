@@ -769,7 +769,11 @@ async function createEvent(params, cal, Ci, Cc) {
     }
     const endDateOnly = end ? parseDateOnly(end) : shiftDateOnly(startDateOnly, 1);
     if (!endDateOnly) {
-      return Utils.fail("invalid_date", `Could not parse date: "${end}"`, 400, Utils.DATE_SUGGESTIONS);
+      // Name the input that failed: when `end` was omitted the default was
+      // start + 1 day, and reporting `"undefined"` told the caller nothing
+      // (M12).
+      const describedEnd = end !== undefined ? end : `${startDateOnly} + 1 day`;
+      return Utils.fail("invalid_date", `Could not parse date: "${describedEnd}"`, 400, Utils.DATE_SUGGESTIONS);
     }
     if (endDateOnly <= startDateOnly) {
       return Utils.fail("invalid_date", "End date must be after start date", 400, [
