@@ -19,7 +19,9 @@
 // `count(event)` helper. `experimentHarness` additionally exposes the
 // background surface (`Email`, `Utils`, `messenger`, `messages`, ...) and,
 // when given `options.t`, registers teardown assertions (no leaked clock
-// timers, no in-flight refresh operations).
+// timers, no in-flight refresh operations). `options.noRequestListener` skips
+// registering the background request listener, modelling a request that
+// arrives before the background is ready.
 //
 // Everything is dependency-free: no network, no Thunderbird, and no real
 // timers except the request helper's hung-detection safety net.
@@ -615,16 +617,21 @@ function experimentHarness(options = {}) {
     constructor({ register, name }) { this.register = register; this.name = name; }
     api() {
       return {
-        addListener: listener => this.register({
-          async: payload => {
-            // Observe experiment -> background dispatch so tests can assert that
-            // a rejected request never fires a background event.
-            if (this.name === "httpServer.onRequest") {
-              events.push(["background-request", payload.method, payload.path]);
+        addListener: listener => {
+          // options.noRequestListener models a server that is reachable before
+          // the background has registered its listener: onRequestFire stays null.
+          if (this.name === "httpServer.onRequest" && options.noRequestListener) return;
+          this.register({
+            async: payload => {
+              // Observe experiment -> background dispatch so tests can assert that
+              // a rejected request never fires a background event.
+              if (this.name === "httpServer.onRequest") {
+                events.push(["background-request", payload.method, payload.path]);
+              }
+              return listener(payload);
             }
-            return listener(payload);
-          }
-        })
+          });
+        }
       };
     }
   }

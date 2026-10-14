@@ -118,9 +118,23 @@ async function handleRequest(request) {
   }
 }
 
-// Listen for HTTP requests from experiment
+// Listen for HTTP requests from experiment. Every request must reach
+// sendResponse: a throwing handler (or one whose serialisation fails) still
+// gets a 500 body instead of leaving the request unanswered.
+const FALLBACK_500_BODY = '{"error":"Internal server error"}';
+
 browser.httpServer.onRequest.addListener(async (request) => {
-  const response = await handleRequest(request);
+  let response = null;
+  try {
+    response = await handleRequest(request);
+  } catch (e) {
+    console.error("[tb-api] Request handler failed:", e);
+  }
+
+  if (!response || typeof response.body !== "string" || !Number.isInteger(response.statusCode)) {
+    response = { statusCode: 500, body: FALLBACK_500_BODY };
+  }
+
   browser.httpServer.sendResponse(request.id, response.statusCode, response.body);
 });
 

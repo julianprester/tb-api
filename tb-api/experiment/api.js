@@ -5,6 +5,52 @@ var { ExtensionCommon } = ChromeUtils.importESModule(
   "resource://gre/modules/ExtensionCommon.sys.mjs"
 );
 
+// Shared with folders.js so every timer in the experiment can be controlled
+// from one place (and faked in tests).
+var { setTimeout, clearTimeout } = ChromeUtils.importESModule(
+  "resource://gre/modules/Timer.sys.mjs"
+);
+
+// Maximum time a request may stay unanswered before the watchdog replies 504.
+// Above the 60 s refresh maximum plus the 20 s email-search budget.
+const REQUEST_TIMEOUT_MS = 120000;
+
+/**
+ * Write a JSON body to a stored pending response and finish it. The watchdog
+ * timer is cleared first so a request can never receive two responses.
+ */
+function finishPendingResponse(pending, statusCode, body) {
+  if (pending.timer !== undefined) clearTimeout(pending.timer);
+
+  const { response, httpVersion } = pending;
+  response.setStatusLine(httpVersion, statusCode, "OK");
+  response.setHeader("Content-Type", "application/json; charset=utf-8", false);
+
+  const cos = Cc["@mozilla.org/intl/converter-output-stream;1"]
+    .createInstance(Ci.nsIConverterOutputStream);
+  cos.init(response.bodyOutputStream, "UTF-8");
+  cos.writeString(body);
+  cos.close();
+
+  response.finish();
+}
+
+/**
+ * Answer every pending request with 503 and clear its watchdog. Used on
+ * shutdown so no client waits for a response that will never come.
+ */
+function failPendingRequests(pendingRequests) {
+  const body = JSON.stringify({ error: "Server is shutting down", code: "api_not_ready" });
+  for (const [requestId, pending] of [...pendingRequests]) {
+    pendingRequests.delete(requestId);
+    try {
+      finishPendingResponse(pending, 503, body);
+    } catch (e) {
+      console.error(`[tb-api] Failed to finish pending request ${requestId}:`, e);
+    }
+  }
+}
+
 var httpServer = class extends ExtensionCommon.ExtensionAPI {
   constructor(extension) {
     super(extension);
@@ -105,18 +151,7 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
       if (!pending) return false;
 
       self.pendingRequests.delete(requestId);
-      const { response, httpVersion } = pending;
-
-      response.setStatusLine(httpVersion, statusCode, "OK");
-      response.setHeader("Content-Type", "application/json; charset=utf-8", false);
-
-      const cos = Cc["@mozilla.org/intl/converter-output-stream;1"]
-        .createInstance(Ci.nsIConverterOutputStream);
-      cos.init(response.bodyOutputStream, "UTF-8");
-      cos.writeString(body);
-      cos.close();
-
-      response.finish();
+      finishPendingResponse(pending, statusCode, body);
       return true;
     }
 
@@ -207,6 +242,31 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
     }
 
     /**
+     * Answer a request whose background handler failed with 500. Reached both
+     * when the handler rejects and when it throws before returning a promise.
+     */
+    function failBackgroundRequest(requestId, error) {
+      console.error("[tb-api] Background request failed:", error);
+      sendJsonResponse(requestId, { error: error.message }, 500);
+    }
+
+    /**
+     * HTTP status for an error raised while handling a calendar route.
+     *
+     * Calendar code runs in its own script realm, so errors thrown there are
+     * not `instanceof` this realm's SyntaxError/URIError; the error name is
+     * stable across realms. RequestError is exported by Utils and both sides
+     * live in that realm, so instanceof is safe for it.
+     */
+    function calendarErrorStatus(error) {
+      if (error && calendarScope.Utils && error instanceof calendarScope.Utils.RequestError) {
+        return error.statusCode || 400;
+      }
+      if (error && (error.name === "SyntaxError" || error.name === "URIError")) return 400;
+      return 500;
+    }
+
+    /**
      * Send calendar response with appropriate status code
      */
     function sendCalendarResponse(requestId, result) {
@@ -218,9 +278,11 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
      * Handle calendar routes directly
      */
     async function handleCalendarRoute(requestId, method, path, queryString, body) {
-      const params = calendarScope.Utils.parseRequestParams(queryString, body);
-
       try {
+        // Parsing happens inside the try: a malformed body or query string
+        // must become a 400 response, never an unhandled rejection.
+        const params = calendarScope.Utils.parseRequestParams(queryString, body);
+
         // GET /calendars
         if (path === "/calendars" && method === "GET") {
           sendCalendarResponse(requestId, calendar.listCalendars(cal));
@@ -292,7 +354,9 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
 
       } catch (e) {
         console.error("[tb-api] Calendar error:", e);
-        sendJsonResponse(requestId, { error: e.message }, 500);
+        const error = { error: e.message };
+        if (e.code) error.code = e.code;
+        sendJsonResponse(requestId, error, calendarErrorStatus(e));
       }
     }
 
@@ -407,29 +471,58 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
               return;
             }
 
-            self.pendingRequests.set(requestId, {
-              response,
-              httpVersion: request.httpVersion
-            });
-
             const path = request.path;
             const queryString = request.queryString;
 
-            // Handle calendar routes directly in experiment context
+            // A stored request that is never answered must not hang forever:
+            // the watchdog finishes it with 504 and clears itself in
+            // writeResponse when any other path answers first.
+            const watchdog = setTimeout(() => {
+              console.error(`[tb-api] Request ${method} ${path} timed out after ${REQUEST_TIMEOUT_MS} ms`);
+              sendJsonResponse(requestId, {
+                error: "Request timed out",
+                code: "request_timeout"
+              }, 504);
+            }, REQUEST_TIMEOUT_MS);
+
+            self.pendingRequests.set(requestId, {
+              response,
+              httpVersion: request.httpVersion,
+              timer: watchdog
+            });
+
+            // Handle calendar routes directly in experiment context. The
+            // promise must never reject unhandled: without the catch a
+            // rejection would leave the request pending until the watchdog.
             if (isCalendarRoute(path)) {
-              handleCalendarRoute(requestId, method, path, queryString, body);
+              handleCalendarRoute(requestId, method, path, queryString, body)
+                .catch(e => sendJsonResponse(requestId, { error: e.message }, 500));
               return;
             }
 
-            // Fire event for background script to handle
-            if (onRequestFire) {
+            // The background listener may not be registered (yet): answer
+            // instead of leaving the request pending forever.
+            if (!onRequestFire) {
+              sendJsonResponse(requestId, {
+                error: "API is not ready to handle this request",
+                code: "api_not_ready"
+              }, 503);
+              return;
+            }
+
+            // Fire event for background script to handle. A rejected handler
+            // still produces exactly one response, and the try also covers a
+            // handler that throws before returning a promise.
+            try {
               onRequestFire.async({
                 id: requestId,
                 method,
                 path,
                 queryString: queryString || "",
                 body
-              });
+              }).catch(e => failBackgroundRequest(requestId, e));
+            } catch (e) {
+              failBackgroundRequest(requestId, e);
             }
           });
 
@@ -469,10 +562,12 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
 
         async stop() {
           self.folderRefresher.cancelAll();
+          // Finish requests still waiting: stopping the server must not leave
+          // clients hanging on a response that can no longer arrive.
+          failPendingRequests(self.pendingRequests);
           if (self.server) {
             await new Promise(resolve => self.server.stop(resolve));
             self.server = null;
-            self.pendingRequests.clear();
             console.log("[tb-api] HTTP server stopped");
           }
         },
@@ -510,6 +605,9 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
 
   close() {
     if (this.folderRefresher) this.folderRefresher.close();
+    // Finish requests still waiting before tearing the server down, so no
+    // client is left without a response and no watchdog outlives the API.
+    failPendingRequests(this.pendingRequests);
     // Stop the HTTP server when extension is unloaded
     if (this.server) {
       console.log("[tb-api] Shutting down HTTP server...");
@@ -517,7 +615,6 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
         console.log("[tb-api] HTTP server stopped on extension close");
       });
       this.server = null;
-      this.pendingRequests.clear();
     }
   }
 };
