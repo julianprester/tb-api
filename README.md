@@ -147,6 +147,7 @@ GET /messages
 | unread | unseen | boolean | Filter by unread status (`true` = unread, `false` = read) |
 | refresh | | boolean | Refresh the selected folder before searching (default false; requires mailbox) |
 | timeoutMs | timeout_ms, timeout | integer | Refresh deadline in milliseconds (default 30000, range 1–60000) |
+| sort | | string | Result order: `date_desc` (default, newest first) or `date_asc` (oldest first) |
 
 **Date formats**: ISO 8601 (`2024-01-15`), or natural language (`today`, `yesterday`, `2 days ago`, `last week`)
 
@@ -165,6 +166,27 @@ an error instead of silently returning potentially stale results. `refresh=false
 or `refresh=0` never triggers synchronization; true/false and 1/0 are accepted.
 Unscoped searches with `refresh=true` are rejected, since no single folder has been
 selected to refresh. `timeoutMs` is only used when refresh is enabled.
+
+**Ordering and bounded work:** Results are newest first by default
+(`sort=date_desc`); `sort=date_asc` returns the oldest matches first. An unknown
+`sort` value is a `400` with `code: "invalid_parameter"`.
+
+Thunderbird returns matches page by page in database order (oldest first), so
+finding the newest matches means scanning every page. Searches read pages of 500
+messages under a 20-second budget. Responses report `complete`; when the whole
+result set was scanned they also report the exact `matched` count and set
+`has_more` to `matched > limit`. If the budget expires, the response contains
+the newest matches found so far with `complete: false`, `has_more: true` and a
+`warnings` array, and the background scan is aborted so Thunderbird stops using
+CPU. If not even the first page arrives in time, the request fails with `504`
+and `code: "search_timeout"` instead of an empty list. Narrow a slow search with
+`after=`/`before=` or `mailbox=`.
+
+**Full-text search:** `q`/`text` scans message bodies (Thunderbird matches the
+subject and author first, then parses each message's MIME tree), so it can be
+slow. For IMAP folders that are not stored offline, Thunderbird downloads the
+messages to search them. Subject and full-text matching in Thunderbird is
+case-sensitive, so search for the text exactly as it appears.
 
 **Read status:** Every returned message includes a boolean `read`: `true` means
 read, `false` means unread. This is also included in single-message responses.

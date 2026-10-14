@@ -32,6 +32,8 @@ function emailHarness() {
 }
 
 // Harness values come from a vm realm, so normalize arrays before comparing.
+// Expected ID lists are newest first (Task 3.5 / D6), matching the fixture
+// dates 13:00, 12:00, 11:00, 10:00 for IDs 4, 3, 2, 1.
 const ids = body => Array.from(body.messages, message => message.id);
 
 // ---------------------------------------------------------------------------
@@ -103,10 +105,10 @@ test("contradictory read/unread filters are 400 invalid_filter before any query"
 test("consistent read/unread pairs are accepted and select the same state", async () => {
   const h = emailHarness();
   const cases = [
-    ["read=true&unread=false", false, [2, 3]],
-    ["read=false&unread=true", true, [1, 4]],
-    ["read=1&unseen=0", false, [2, 3]],
-    ["read=0&unseen=1", true, [1, 4]]
+    ["read=true&unread=false", false, [3, 2]],
+    ["read=false&unread=true", true, [4, 1]],
+    ["read=1&unseen=0", false, [3, 2]],
+    ["read=0&unseen=1", true, [4, 1]]
   ];
   for (const [queryString, expectedUnread, expectedIds] of cases) {
     const result = await h.request("GET", "/messages", queryString);
@@ -119,10 +121,10 @@ test("consistent read/unread pairs are accepted and select the same state", asyn
 test("true/false/1/0 still filter unread, read, flagged and junk exactly as before", async () => {
   const h = emailHarness();
   const expectations = {
-    unread: { true: [1, 4], false: [2, 3] },
-    read: { true: [2, 3], false: [1, 4] },
-    flagged: { true: [1, 3], false: [2, 4] },
-    junk: { true: [3, 4], false: [1, 2] }
+    unread: { true: [4, 1], false: [3, 2] },
+    read: { true: [3, 2], false: [4, 1] },
+    flagged: { true: [3, 1], false: [4, 2] },
+    junk: { true: [4, 3], false: [2, 1] }
   };
   for (const [name, byValue] of Object.entries(expectations)) {
     for (const [expectedKey, expectedIds] of Object.entries(byValue)) {
@@ -140,11 +142,11 @@ test("true/false/1/0 still filter unread, read, flagged and junk exactly as befo
 
 test("programmatic boolean values are accepted unchanged", async () => {
   const h = emailHarness();
-  assert.deepEqual(ids(await h.Email.searchMessages({ unread: true })), [1, 4]);
-  assert.deepEqual(ids(await h.Email.searchMessages({ unread: false })), [2, 3]);
-  assert.deepEqual(ids(await h.Email.searchMessages({ read: false })), [1, 4]);
-  assert.deepEqual(ids(await h.Email.searchMessages({ flagged: 1 })), [1, 3]);
-  assert.deepEqual(ids(await h.Email.searchMessages({ junk: 0 })), [1, 2]);
+  assert.deepEqual(ids(await h.Email.searchMessages({ unread: true })), [4, 1]);
+  assert.deepEqual(ids(await h.Email.searchMessages({ unread: false })), [3, 2]);
+  assert.deepEqual(ids(await h.Email.searchMessages({ read: false })), [4, 1]);
+  assert.deepEqual(ids(await h.Email.searchMessages({ flagged: 1 })), [3, 1]);
+  assert.deepEqual(ids(await h.Email.searchMessages({ junk: 0 })), [2, 1]);
 });
 
 test("invalid refresh keeps its existing invalid_refresh error and never searches", async () => {

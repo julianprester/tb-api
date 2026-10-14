@@ -8,6 +8,19 @@
 // Cache for mailbox list (for suggestions)
 let mailboxCache = null;
 
+// Thunderbird's messages.query returns one page per call in database order
+// (oldest first) and keeps scanning in the background until the list is
+// finished or aborted (Appendix A.1). A search therefore has to read pages
+// until the result set is exhausted to find the newest matches, so it does so
+// in large pages under a fixed budget.
+const SEARCH_PAGE_SIZE = 500;
+const SEARCH_BUDGET_MS = 20000;
+// Opening every MIME parser of a full 100-message page at once is wasteful;
+// the final page's bodies are read in small concurrent batches.
+const SEARCH_MIME_CONCURRENCY = 8;
+const SEARCH_TIMEOUT_WARNING =
+  "Search stopped after 20 s; add after=/before= or a mailbox to narrow it";
+
 function parseRefreshTimeout(value = 30000) {
   const timeoutMs = typeof value === "string" && /^\d+$/.test(value.trim())
     ? Number(value.trim()) : value;
@@ -63,14 +76,139 @@ async function refreshMailbox(params) {
 }
 
 /**
+ * Timestamp used to order matches. Missing or unparseable dates sort as 0 so a
+ * message without a usable date never breaks the binary insert.
+ */
+function messageTimestamp(msg) {
+  const time = msg && msg.date ? new Date(msg.date).getTime() : 0;
+  return Number.isNaN(time) ? 0 : time;
+}
+
+/**
+ * Insert one message into a small sorted window using a binary search.
+ *
+ * `top` holds at most `limit + 1` messages, ordered newest -> oldest by default
+ * or oldest -> newest when `ascending` is set, so memory stays O(limit) however
+ * many messages match. The extra slot lets the caller report `matched > limit`
+ * without keeping every match.
+ */
+function insertNewest(top, msg, limit, ascending = false) {
+  const time = messageTimestamp(msg);
+  let low = 0;
+  let high = top.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    const pivot = messageTimestamp(top[mid]);
+    // Insert after equal timestamps so ties keep Thunderbird's database order.
+    if (ascending ? pivot <= time : pivot >= time) low = mid + 1;
+    else high = mid;
+  }
+  top.splice(low, 0, msg);
+  if (top.length > limit + 1) top.length = limit + 1;
+}
+
+/**
+ * Race a Thunderbird call against an absolute deadline.
+ *
+ * Resolves to `null` when the deadline passes first. Underlying rejections are
+ * propagated so a failed page is not mistaken for a slow one. The timer is
+ * always cleared, including on success, so no work is left scheduled.
+ */
+function withDeadline(promise, deadline) {
+  const remaining = deadline - Date.now();
+  if (!(remaining > 0)) {
+    // The call was already started; consume a late rejection so it never
+    // becomes an unhandled rejection.
+    Promise.resolve(promise).catch(() => {});
+    return Promise.resolve(null);
+  }
+  // The background test harness can run without a timer global; there is then
+  // nothing to race and the promise's own settlement is the only outcome.
+  if (typeof setTimeout !== "function") return Promise.resolve(promise);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(null), remaining);
+    promise.then(
+      value => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      error => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
+/**
+ * Read every page of a message query, keeping only the `limit` newest (or
+ * oldest) matches.
+ *
+ * Thunderbird scans in database order (oldest first) and keeps working in the
+ * background after returning a page, so this walks `continueList` until the
+ * list is exhausted or the budget expires, then aborts the list. Aborting also
+ * stops Thunderbird from parsing message bodies for a full-text `q` search.
+ *
+ * Returns `{ messages, matched, complete }`; `complete` means the whole result
+ * set was scanned and `matched` is the exact number of matches.
+ */
+async function collectNewest(queryInfo, limit, ascending = false) {
+  const deadline = Date.now() + SEARCH_BUDGET_MS;
+  const top = [];
+  let matched = 0;
+  let complete = false;
+  let listId = null;
+  try {
+    let page = await withDeadline(
+      messenger.messages.query({
+        ...queryInfo,
+        messagesPerPage: SEARCH_PAGE_SIZE,
+        autoPaginationTimeout: 0
+      }),
+      deadline
+    );
+    while (page) {
+      listId = page.id || null;
+      for (const msg of page.messages || []) {
+        matched++;
+        insertNewest(top, msg, limit, ascending);
+      }
+      if (!listId) {
+        complete = true;
+        break;
+      }
+      page = await withDeadline(messenger.messages.continueList(listId), deadline);
+    }
+  } finally {
+    // Every early exit (budget, exception, cancellation) must stop the
+    // background scan. abortList can reject when the list is already gone;
+    // that must not mask the real result or error.
+    if (!complete && listId) {
+      try {
+        await messenger.messages.abortList(listId);
+      } catch (e) {}
+    }
+  }
+  return { messages: top, matched, complete };
+}
+
+/**
  * Search messages with flexible parameter handling
  */
 async function searchMessages(params) {
   // Normalize parameters - accept common aliases
   const normalized = Utils.normalizeParams(params, Utils.ALIASES.emailSearch);
-  const { text, from, to, subject, mailbox, after, before, limit = 50 } = normalized;
+  const { text, from, to, subject, mailbox, after, before, limit = 50, sort = "date_desc" } = normalized;
   const parsedLimit = parseInt(limit, 10);
   const maxResults = Math.min(Math.max(parsedLimit > 0 ? parsedLimit : 50, 1), 100);
+
+  // Ordering is explicit instead of accidental: an unknown value must not
+  // silently fall back to a different order than the caller asked for.
+  if (sort !== "date_desc" && sort !== "date_asc") {
+    return Utils.fail("invalid_parameter", `Unknown sort: "${sort}"`, 400, [
+      "Use sort=date_desc (newest first) or sort=date_asc (oldest first)"
+    ]);
+  }
 
   // Resolve flag filters using the same aliases as PATCH /messages
   // "unread"/"unseen" -> unread=true, "read"/"seen"/"opened" -> unread=false
@@ -161,74 +299,114 @@ async function searchMessages(params) {
   let refreshResult;
   if (refreshRequested) {
     refreshResult = await refresh_folder(queryInfo.folderId, { timeoutMs: normalized.timeoutMs });
-    if (refreshResult.error) return refreshResult;
+    if (refreshResult.error) {
+      return {
+        ...refreshResult,
+        ...(resolvedMailbox ? { resolved_mailbox: resolvedMailbox } : {})
+      };
+    }
   }
 
-  const result = await messenger.messages.query(queryInfo);
-  let messages = result.messages || [];
+  // Metadata that every response branch must preserve (Task 3.3): which folder
+  // was searched and, when requested, the refresh outcome.
+  const meta = {
+    ...(resolvedMailbox ? { resolved_mailbox: resolvedMailbox } : {}),
+    ...(refreshResult ? { refresh: refreshResult } : {})
+  };
+
+  // Read every page under the budget and keep only the newest (or oldest)
+  // `maxResults` matches in memory. A page failure propagates after the
+  // collector has aborted Thunderbird's background scan.
+  const collected = await collectNewest(queryInfo, maxResults, sort === "date_asc");
+
+  // The budget expired before any page arrived: an empty list would look like
+  // "no matches" and hide the timeout.
+  if (!collected.complete && collected.matched === 0) {
+    return {
+      ...Utils.fail(
+        "search_timeout",
+        `Search did not return a page within ${SEARCH_BUDGET_MS / 1000} s`,
+        504,
+        [SEARCH_TIMEOUT_WARNING]
+      ),
+      ...meta
+    };
+  }
+
+  const matches = collected.messages.slice(0, maxResults);
+
+  // Format messages. This runs only on the final page, not on every match, so
+  // an abandoned scan does not open MIME parsers for messages it will not
+  // return. The MIME calls are batched so a full page never opens every parser
+  // at once.
+  const formatted = [];
+  for (let start = 0; start < matches.length; start += SEARCH_MIME_CONCURRENCY) {
+    formatted.push(...await Promise.all(
+      matches.slice(start, start + SEARCH_MIME_CONCURRENCY).map(async (msg) => {
+        let preview = "";
+        try {
+          const parts = await messenger.messages.listInlineTextParts(msg.id);
+          if (parts && parts.length > 0) {
+            const plainPart = parts.find(p => p.contentType === "text/plain");
+            if (plainPart && plainPart.content) {
+              preview = plainPart.content.substring(0, 500);
+            } else {
+              // Fall back to HTML part if no plain text available
+              const htmlPart = parts.find(p => p.contentType === "text/html");
+              if (htmlPart && htmlPart.content) {
+                const plainText = await messenger.messengerUtilities.convertToPlainText(htmlPart.content);
+                preview = plainText.substring(0, 500);
+              }
+            }
+          }
+        } catch (e) {}
+
+        return {
+          id: msg.id,
+          message_id: msg.headerMessageId,
+          date: msg.date ? new Date(msg.date).toISOString() : null,
+          from: msg.author,
+          to: cleanAddressList(msg.recipients),
+          subject: msg.subject,
+          read: !!msg.read,
+          flags: getFlags(msg),
+          mailbox: msg.folder?.name || "",
+          has_attachment: msg.attachments?.length > 0 || false,
+          preview
+        };
+      })
+    ));
+  }
 
   // If no results but we have filters, provide helpful feedback
-  if (messages.length === 0) {
+  if (formatted.length === 0) {
     const hints = [];
     if (text) hints.push(`No messages contain "${text}"`);
     if (from) hints.push(`No messages from "${from}"`);
     if (mailbox) hints.push(`Try searching in a different mailbox`);
     if (after || before) hints.push(`Try adjusting the date range`);
-    
+
     return {
       messages: [],
       total: 0,
+      matched: collected.matched,
+      complete: collected.complete,
       has_more: false,
       hints: hints.length > 0 ? hints : ["No messages match your search criteria"],
-      ...(resolvedMailbox ? { resolved_mailbox: resolvedMailbox } : {}),
-      ...(refreshResult ? { refresh: refreshResult } : {})
+      ...meta
     };
   }
-
-  const hasMore = messages.length > maxResults;
-  messages = messages.slice(0, maxResults);
-
-  // Format messages
-  const formatted = await Promise.all(messages.map(async (msg) => {
-    let preview = "";
-    try {
-      const parts = await messenger.messages.listInlineTextParts(msg.id);
-      if (parts && parts.length > 0) {
-        const plainPart = parts.find(p => p.contentType === "text/plain");
-        if (plainPart && plainPart.content) {
-          preview = plainPart.content.substring(0, 500);
-        } else {
-          // Fall back to HTML part if no plain text available
-          const htmlPart = parts.find(p => p.contentType === "text/html");
-          if (htmlPart && htmlPart.content) {
-            const plainText = await messenger.messengerUtilities.convertToPlainText(htmlPart.content);
-            preview = plainText.substring(0, 500);
-          }
-        }
-      }
-    } catch (e) {}
-
-    return {
-      id: msg.id,
-      message_id: msg.headerMessageId,
-      date: msg.date ? new Date(msg.date).toISOString() : null,
-      from: msg.author,
-      to: cleanAddressList(msg.recipients),
-      subject: msg.subject,
-      read: !!msg.read,
-      flags: getFlags(msg),
-      mailbox: msg.folder?.name || "",
-      has_attachment: msg.attachments?.length > 0 || false,
-      preview
-    };
-  }));
 
   return {
     messages: formatted,
     total: formatted.length,
-    has_more: hasMore,
-    ...(resolvedMailbox ? { resolved_mailbox: resolvedMailbox } : {}),
-    ...(refreshResult ? { refresh: refreshResult } : {})
+    // `matched` is only exact once the whole result set was scanned; while
+    // incomplete, `has_more` says "there may be more" instead of guessing.
+    ...(collected.complete ? { matched: collected.matched } : {}),
+    complete: collected.complete,
+    has_more: collected.complete ? collected.matched > maxResults : true,
+    ...(collected.complete ? {} : { warnings: [SEARCH_TIMEOUT_WARNING] }),
+    ...meta
   };
 }
 
