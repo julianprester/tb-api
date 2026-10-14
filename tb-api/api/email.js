@@ -5,9 +5,6 @@
  * Designed for LLM consumption with flexible inputs and helpful errors
  */
 
-// Cache for mailbox list (for suggestions)
-let mailboxCache = null;
-
 // Thunderbird's messages.query returns one page per call in database order
 // (oldest first) and keeps scanning in the background until the list is
 // finished or aborted (Appendix A.1). A search therefore has to read pages
@@ -966,7 +963,7 @@ async function updateMessages(params) {
 }
 
 /**
- * List mailboxes (also updates cache for suggestions)
+ * List mailboxes
  */
 async function listMailboxes() {
   const accounts = await messenger.accounts.list();
@@ -990,9 +987,6 @@ async function listMailboxes() {
       });
     }
   }
-
-  // Update cache for suggestions
-  mailboxCache = mailboxes;
 
   return { mailboxes };
 }

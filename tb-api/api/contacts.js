@@ -6,18 +6,12 @@
  * Designed for LLM consumption with flexible inputs and helpful errors
  */
 
-// Cache for address books (for suggestions)
-let addressBookCache = null;
-
 /**
- * List address books (also updates cache for suggestions)
+ * List address books
  */
 async function listAddressBooks() {
   const books = await messenger.addressBooks.list();
-  
-  // Update cache
-  addressBookCache = books;
-  
+
   return {
     addressbooks: books.map(book => ({
       id: book.id,
@@ -36,10 +30,7 @@ async function listAddressBooks() {
  * carried over for the write path's 403 check.
  */
 async function resolveAddressBook(addressbook, mode) {
-  const books = addressBookCache || (await messenger.addressBooks.list());
-
-  // Update cache if needed
-  if (!addressBookCache) addressBookCache = books;
+  const books = await messenger.addressBooks.list();
 
   const resolved = Utils.resolveTarget("addressbook", addressbook, {
     mode,
@@ -70,9 +61,8 @@ async function searchContacts(params) {
     if (resolved.error) return resolved;
     contacts = await messenger.contacts.list(resolved.id);
   } else {
-    const books = addressBookCache || (await messenger.addressBooks.list());
-    if (!addressBookCache) addressBookCache = books;
-    
+    const books = await messenger.addressBooks.list();
+
     for (const book of books) {
       const bookContacts = await messenger.contacts.list(book.id);
       contacts.push(...bookContacts);
@@ -125,9 +115,8 @@ async function createContact(params) {
 
   // Auto-select first writable address book if not specified
   if (!addressbook) {
-    const books = addressBookCache || (await messenger.addressBooks.list());
-    if (!addressBookCache) addressBookCache = books;
-    
+    const books = await messenger.addressBooks.list();
+
     const writableBooks = books.filter(b => !b.readOnly);
     if (writableBooks.length === 0) {
       return Utils.fail("read_only", "No writable address book available", 403, [
@@ -142,7 +131,7 @@ async function createContact(params) {
     if (resolved.error) return resolved;
     
     if (resolved.readOnly) {
-      const books = addressBookCache || (await messenger.addressBooks.list());
+      const books = await messenger.addressBooks.list();
       const writableBooks = books.filter(b => !b.readOnly);
       return Utils.fail("read_only", `Address book "${resolved.name}" is read-only`, 403, [
         writableBooks.length > 0 
