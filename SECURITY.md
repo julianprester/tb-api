@@ -10,10 +10,7 @@ The Thunderbird API extension exposes email, calendar, and contacts functionalit
 
 By default, the API binds to `127.0.0.1:9595` (localhost only), preventing external network access. This is the recommended configuration for local use.
 
-For Docker deployments, the API binds to `0.0.0.0` to allow container networking, but should be protected by:
-- Not exposing port 9595 to the public internet
-- Using authentication tokens
-- Running behind a reverse proxy with TLS if remote access is needed
+For Docker deployments, the API binds to `0.0.0.0` inside the container so that the container network can reach it, but the Compose file publishes every port (`5800`, `5900`, `9595`) on `127.0.0.1` only, so nothing is exposed outside the Docker host. The Compose file also refuses to start without `TB_API_TOKEN`. If remote access is needed, use a reverse proxy with TLS rather than publishing port 9595 on a public interface.
 
 ### Authentication
 
@@ -28,14 +25,26 @@ When set, all requests must include:
 Authorization: Bearer your-secret-token
 ```
 
-**Always enable authentication in any non-local deployment.**
+**Always enable authentication in any non-local deployment.** The server fails closed: if it is asked to bind to a non-loopback address (for example `0.0.0.0` inside Docker) and `TB_API_TOKEN` is not set, it refuses to start.
+
+### Origin Policy
+
+The API does not emit a wildcard CORS header. A browser request is served only when its `Origin` header exactly matches an entry in `TB_API_ALLOWED_ORIGINS` (comma-separated, empty by default):
+
+```bash
+export TB_API_ALLOWED_ORIGINS="https://app.example.com"
+```
+
+Requests with a non-allowlisted `Origin`, and requests that look cross-site (`Sec-Fetch-Site: cross-site` or `same-site`) without an allowlisted origin, are rejected with `403` before authentication runs. Browser writes with a body must also send `Content-Type: application/json`, which blocks cross-site form posts that do not trigger a CORS preflight.
 
 ### Host Header Validation
 
-The API validates the HTTP Host header to prevent DNS rebinding attacks. Allowed hosts:
+The API validates the HTTP Host header against known names to make DNS rebinding attacks harder:
 - `localhost`
 - `127.0.0.1`
-- Custom hosts via `TB_API_ALLOWED_HOSTS` environment variable
+- Additional names via `TB_API_HOSTS` (comma-separated, e.g. `thunderbird,192.168.1.10`)
+
+**This check is not an authentication boundary.** Non-browser clients can send any Host header they choose, so it does not stop them. It only makes it harder for a page on an attacker-controlled hostname to reach the API from a browser. Use `TB_API_TOKEN` and `TB_API_ALLOWED_ORIGINS` as the actual access controls.
 
 ## Supported Versions
 
