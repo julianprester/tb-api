@@ -12,11 +12,12 @@ function parseRefreshTimeout(value = 30000) {
   const timeoutMs = typeof value === "string" && /^\d+$/.test(value.trim())
     ? Number(value.trim()) : value;
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60000) {
-    return {
-      error: "timeoutMs must be an integer between 1 and 60000",
-      code: "invalid_timeout",
-      suggestions: ["Use timeoutMs=30000 (milliseconds); the maximum is 60000"]
-    };
+    return Utils.fail(
+      "invalid_timeout",
+      "timeoutMs must be an integer between 1 and 60000",
+      400,
+      ["Use timeoutMs=30000 (milliseconds); the maximum is 60000"]
+    );
   }
   return { timeoutMs };
 }
@@ -27,7 +28,7 @@ function parseRefreshTimeout(value = 30000) {
  */
 async function refresh_folder(folderId, { timeoutMs } = {}) {
   if (typeof folderId !== "string" || !folderId.trim()) {
-    return { error: "A folder ID is required", code: "invalid_folder" };
+    return Utils.fail("invalid_folder", "A folder ID is required", 400);
   }
   const timeout = parseRefreshTimeout(timeoutMs);
   if (timeout.error) return timeout;
@@ -35,11 +36,7 @@ async function refresh_folder(folderId, { timeoutMs } = {}) {
   try {
     return await browser.httpServer.refreshFolder(folderId, timeout.timeoutMs);
   } catch (e) {
-    return {
-      error: `Could not refresh folder: ${e.message}`,
-      code: "refresh_failed",
-      statusCode: 500
-    };
+    return Utils.fail("refresh_failed", `Could not refresh folder: ${e.message}`, 500);
   }
 }
 
@@ -49,11 +46,12 @@ async function refresh_folder(folderId, { timeoutMs } = {}) {
 async function refreshMailbox(params) {
   const normalized = Utils.normalizeParams(params, Utils.PARAM_ALIASES);
   if (!normalized.mailbox) {
-    return {
-      error: "mailbox is required for folder refresh",
-      code: "missing_mailbox",
-      suggestions: ["Specify a folder ID, name, or role, e.g. mailbox=sent", "Use GET /mailboxes to find folder IDs"]
-    };
+    return Utils.fail(
+      "missing_mailbox",
+      "mailbox is required for folder refresh",
+      400,
+      ["Specify a folder ID, name, or role, e.g. mailbox=sent", "Use GET /mailboxes to find folder IDs"]
+    );
   }
   const resolved = await resolveMailboxWithSuggestions(normalized.mailbox);
   if (resolved.error) return resolved;
@@ -81,14 +79,15 @@ async function searchMessages(params) {
   }
   const refreshRequested = normalized.refresh === undefined ? false : parseBool(normalized.refresh);
   if (refreshRequested === undefined) {
-    return { error: "refresh must be true, false, 1, or 0", code: "invalid_refresh" };
+    return Utils.fail("invalid_refresh", "refresh must be true, false, 1, or 0", 400);
   }
   if (refreshRequested && !mailbox) {
-    return {
-      error: "mailbox is required when refresh=true",
-      code: "missing_mailbox",
-      suggestions: ["Specify the folder to refresh and search, e.g. mailbox=inbox&refresh=true"]
-    };
+    return Utils.fail(
+      "missing_mailbox",
+      "mailbox is required when refresh=true",
+      400,
+      ["Specify the folder to refresh and search, e.g. mailbox=inbox&refresh=true"]
+    );
   }
   const flagFilters = {};
   if (normalized.unread !== undefined) {
@@ -124,12 +123,9 @@ async function searchMessages(params) {
     if (date) {
       queryInfo.fromDate = date;
     } else {
-      return { 
-        error: `Could not parse date: "${after}"`,
-        suggestions: [
-          'Try formats like: "today", "yesterday", "2024-01-15", "2 days ago", "last week"'
-        ]
-      };
+      return Utils.fail("invalid_date", `Could not parse date: "${after}"`, 400, [
+        'Try formats like: "today", "yesterday", "2024-01-15", "2 days ago", "last week"'
+      ]);
     }
   }
   if (before) {
@@ -137,12 +133,9 @@ async function searchMessages(params) {
     if (date) {
       queryInfo.toDate = date;
     } else {
-      return { 
-        error: `Could not parse date: "${before}"`,
-        suggestions: [
-          'Try formats like: "today", "tomorrow", "2024-01-15", "in 3 days"'
-        ]
-      };
+      return Utils.fail("invalid_date", `Could not parse date: "${before}"`, 400, [
+        'Try formats like: "today", "tomorrow", "2024-01-15", "in 3 days"'
+      ]);
     }
   }
 
@@ -248,14 +241,11 @@ async function getMessage(messageId) {
   }
   
   if (!result.messages || result.messages.length === 0) {
-    return { 
-      error: `Message not found: ${messageId}`,
-      suggestions: [
-        "Verify the Message-ID is correct (check email headers)",
-        "The message may have been deleted or moved",
-        "Try searching by subject or sender instead: GET /messages?from=sender@example.com"
-      ]
-    };
+    return Utils.fail("not_found", `Message not found: ${messageId}`, 404, [
+      "Verify the Message-ID is correct (check email headers)",
+      "The message may have been deleted or moved",
+      "Try searching by subject or sender instead: GET /messages?from=sender@example.com"
+    ]);
   }
 
   const msg = result.messages[0];
@@ -314,7 +304,7 @@ async function resolveMessageRef(ref) {
       await messenger.messages.get(asInt);
       return { id: asInt };
     } catch {
-      return { error: `Message not found with ID: ${ref}` };
+      return Utils.fail("not_found", `Message not found with ID: ${ref}`, 404);
     }
   }
 
@@ -334,7 +324,7 @@ async function resolveMessageRef(ref) {
         return { id: result2.messages[0].id };
       }
     }
-    return { error: `Message not found with Message-ID: "${ref}"` };
+    return Utils.fail("not_found", `Message not found with Message-ID: "${ref}"`, 404);
   }
   return { id: result.messages[0].id };
 }
@@ -396,15 +386,12 @@ async function composeMessage(params) {
 
   // Validate: for new messages, 'to' is required; for replies/forwards it's optional
   if (!in_reply_to && !forward_of && !to) {
-    return { 
-      error: "Recipient (to) is required for new messages",
-      suggestions: [
-        'Provide a "to" field with an email address',
-        'Example: POST /messages {"to": "user@example.com", "subject": "Hello", "body": "Message content"}',
-        'For replies, use "in_reply_to" with the message_id',
-        'For forwards, use "forward_of" with the message_id'
-      ]
-    };
+    return Utils.fail("invalid_parameter", "Recipient (to) is required for new messages", 400, [
+      'Provide a "to" field with an email address',
+      'Example: POST /messages {"to": "user@example.com", "subject": "Hello", "body": "Message content"}',
+      'For replies, use "in_reply_to" with the message_id',
+      'For forwards, use "forward_of" with the message_id'
+    ]);
   }
 
   // Find identity - auto-select if not specified
@@ -426,13 +413,10 @@ async function composeMessage(params) {
       // Provide helpful suggestions
       const availableIdentities = identities.map(id => id.email);
       const suggestion = Utils.didYouMean(identity, availableIdentities);
-      return {
-        error: `Identity not found: "${identity}"`,
-        suggestions: [
-          suggestion || `Available identities: ${availableIdentities.join(", ")}`,
-          "You can omit the identity field to use the default"
-        ]
-      };
+      return Utils.fail("not_found", `Identity not found: "${identity}"`, 404, [
+        suggestion || `Available identities: ${availableIdentities.join(", ")}`,
+        "You can omit the identity field to use the default"
+      ]);
     }
   }
   
@@ -459,14 +443,16 @@ async function composeMessage(params) {
       mode = "reply";
       const resolved = await resolveMessageRef(in_reply_to);
       if (resolved.error) {
-        return {
-          error: resolved.error,
-          suggestions: [
+        return Utils.fail(
+          resolved.code || "not_found",
+          resolved.error,
+          resolved.statusCode || 404,
+          [
             "Verify the message_id is correct",
             "Use GET /messages to search for the message first",
             "The message may have been deleted"
           ]
-        };
+        );
       }
       
       tab = await messenger.compose.beginReply(resolved.id, "replyToAll", composeDetails);
@@ -480,25 +466,24 @@ async function composeMessage(params) {
       mode = "forward";
       const resolved = await resolveMessageRef(forward_of);
       if (resolved.error) {
-        return {
-          error: resolved.error,
-          suggestions: [
+        return Utils.fail(
+          resolved.code || "not_found",
+          resolved.error,
+          resolved.statusCode || 404,
+          [
             "Verify the message_id is correct",
             "Use GET /messages to search for the message first",
             "The message may have been deleted"
           ]
-        };
+        );
       }
       
       // For forward, 'to' is required
       if (!to) {
-        return {
-          error: "Recipient (to) is required for forwarding",
-          suggestions: [
-            'Provide a "to" field with the email address to forward to',
-            'Example: POST /messages {"forward_of": "message_id", "to": "recipient@example.com"}'
-          ]
-        };
+        return Utils.fail("invalid_parameter", "Recipient (to) is required for forwarding", 400, [
+          'Provide a "to" field with the email address to forward to',
+          'Example: POST /messages {"forward_of": "message_id", "to": "recipient@example.com"}'
+        ]);
       }
       
       tab = await messenger.compose.beginForward(resolved.id, "forwardInline", composeDetails);
@@ -528,14 +513,11 @@ async function composeMessage(params) {
     if (tab) {
       try { await messenger.tabs.remove(tab.id); } catch {}
     }
-    return { 
-      error: `Failed to save draft: ${e.message}`,
-      suggestions: [
-        "Check that the recipient email address is valid",
-        in_reply_to ? "Verify the original message still exists" : null,
-        forward_of ? "Verify the original message still exists" : null
-      ].filter(Boolean)
-    };
+    return Utils.fail("compose_failed", `Failed to save draft: ${e.message}`, 500, [
+      "Check that the recipient email address is valid",
+      in_reply_to ? "Verify the original message still exists" : null,
+      forward_of ? "Verify the original message still exists" : null
+    ].filter(Boolean));
   }
 }
 
@@ -559,13 +541,10 @@ async function updateMessages(params) {
   }
 
   if (!ids || ids.length === 0) {
-    return { 
-      error: "Message ID(s) required",
-      suggestions: [
-        'Provide "ids" as an array of message IDs',
-        'Example: PATCH /messages {"ids": ["<msg-id@example.com>"], "add_flags": ["read"]}'
-      ]
-    };
+    return Utils.fail("invalid_parameter", "Message ID(s) required", 400, [
+      'Provide "ids" as an array of message IDs',
+      'Example: PATCH /messages {"ids": ["<msg-id@example.com>"], "add_flags": ["read"]}'
+    ]);
   }
 
   // Resolve message IDs (could be headerMessageId strings or internal IDs)
@@ -586,13 +565,12 @@ async function updateMessages(params) {
   }
 
   if (messageIds.length === 0) {
-    return { 
-      error: "No valid message IDs found",
-      not_found: notFound,
-      suggestions: [
+    return {
+      ...Utils.fail("not_found", "No valid message IDs found", 404, [
         "Check that the Message-IDs are correct",
         "Use GET /messages to find valid message IDs"
-      ]
+      ]),
+      not_found: notFound
     };
   }
 
@@ -649,15 +627,12 @@ async function updateMessages(params) {
   applyFlags(remove_flags, false);
 
   if (Object.keys(updates).length === 0 && !move_to) {
-    return {
-      error: "No valid action specified",
-      suggestions: [
-        'Use "add_flags" to add flags: ["read", "flagged", "junk"]',
-        'Use "remove_flags" to remove flags',
-        'Use "move_to" to move messages to another folder',
-        'Flag aliases: "starred"="flagged", "seen"="read", "spam"="junk"'
-      ]
-    };
+    return Utils.fail("invalid_parameter", "No valid action specified", 400, [
+      'Use "add_flags" to add flags: ["read", "flagged", "junk"]',
+      'Use "remove_flags" to remove flags',
+      'Use "move_to" to move messages to another folder',
+      'Flag aliases: "starred"="flagged", "seen"="read", "spam"="junk"'
+    ]);
   }
 
   for (const msgId of messageIds) {
@@ -751,7 +726,7 @@ function getFlags(msg) {
  */
 async function resolveMailboxWithSuggestions(mailbox) {
   if (typeof mailbox !== "string" || !mailbox.trim()) {
-    return { error: "mailbox must be a non-empty folder ID, name, or role", code: "invalid_mailbox" };
+    return Utils.fail("invalid_mailbox", "mailbox must be a non-empty folder ID, name, or role", 400);
   }
 
   // Exact IDs take precedence over role/name guesses, especially across accounts.
@@ -793,16 +768,11 @@ async function resolveMailboxWithSuggestions(mailbox) {
 
   // Not found - provide helpful suggestions
   const suggestion = Utils.didYouMean(mailbox, [...validRoles, ...folderNames]);
-  return {
-    error: `Mailbox not found: "${mailbox}"`,
-    code: "folder_not_found",
-    statusCode: 404,
-    suggestions: [
-      suggestion,
-      `Valid roles: ${validRoles.join(", ")}`,
-      `Use GET /mailboxes to see all available folders`
-    ].filter(Boolean)
-  };
+  return Utils.fail("folder_not_found", `Mailbox not found: "${mailbox}"`, 404, [
+    suggestion,
+    `Valid roles: ${validRoles.join(", ")}`,
+    `Use GET /mailboxes to see all available folders`
+  ].filter(Boolean));
 }
 
 // Export

@@ -475,6 +475,7 @@ DELETE /contacts/:id
 ```json
 {
   "error": "Mailbox not found: \"inbx\"",
+  "code": "folder_not_found",
   "suggestions": [
     "Did you mean: inbox?",
     "Valid roles: archives, drafts, inbox, junk, outbox, sent, templates, trash",
@@ -483,21 +484,43 @@ DELETE /contacts/:id
 }
 ```
 
+`code` is stable and machine-readable: match on it. `error` is human-readable
+and may be reworded between releases. `suggestions` is present when the API can
+recommend a fix.
+
+| Code | HTTP status | Meaning |
+|------|-------------|---------|
+| `invalid_body` | 400 | Request body is not a JSON object |
+| `invalid_query` | 400 | Query string could not be parsed |
+| `invalid_parameter` | 400 | Missing or invalid parameter |
+| `invalid_filter` | 400 | Invalid message filter value |
+| `invalid_date` | 400 | Date could not be parsed |
+| `not_found` | 404 | Requested resource does not exist |
+| `folder_not_found` | 404 | Mail folder does not exist |
+| `ambiguous_target` | 409 | Several targets match; specify one |
+| `ambiguous_recurrence` | 409 | Recurring event needs `recurrenceId` or `scope=series` |
+| `read_only` | 403 | Calendar or address book is read-only |
+| `sending_disabled` | 403 | Sending invitations is disabled (`TB_API_ALLOW_SEND`) |
+| `update_failed` | 500 | Updating an existing resource failed |
+| `request_timeout` | 504 | The request was not answered in time |
+
 ### HTTP Status Codes
 
 | Code | Description |
 |------|-------------|
 | 200 | Success |
 | 400 | Bad request (missing/invalid parameters) |
+| 403 | Forbidden (read-only target, sending disabled, rejected origin) |
 | 404 | Resource not found |
 | 405 | Method not allowed |
+| 409 | Ambiguous target (specify the calendar or occurrence) |
 | 500 | Internal server error |
 | 502 | Thunderbird's folder update failed |
 | 503 | Thunderbird offline or refresh unavailable/stopped |
-| 504 | Folder refresh exceeded the caller's deadline |
+| 504 | Request or folder refresh exceeded the deadline |
 
-Refresh errors include a machine-readable `code`, such as `refresh_timeout`,
-`thunderbird_offline`, or `unsupported_folder`.
+Folder-refresh errors additionally use machine-readable codes such as
+`refresh_timeout`, `thunderbird_offline`, or `unsupported_folder`.
 
 ---
 

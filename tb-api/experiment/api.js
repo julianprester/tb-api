@@ -214,15 +214,6 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
     }
 
     /**
-     * Determine HTTP status code from error message
-     */
-    function getErrorStatus(errorMessage) {
-      if (errorMessage.includes("not found")) return 404;
-      if (errorMessage.includes("not available")) return 503;
-      return 400;
-    }
-
-    /**
      * Extract path parameter
      */
     function extractPathParam(path, prefix) {
@@ -267,11 +258,17 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
     }
 
     /**
-     * Send calendar response with appropriate status code
+     * Send calendar response with appropriate status code. `statusCode` is
+     * internal metadata (like the background's resultResponse), so it drives
+     * the HTTP status but is not serialized into the JSON body.
      */
     function sendCalendarResponse(requestId, result) {
-      const status = result.error ? getErrorStatus(result.error) : 200;
-      sendJsonResponse(requestId, result, status);
+      if (!result.error) {
+        sendJsonResponse(requestId, result, 200);
+        return;
+      }
+      const { statusCode, ...body } = result;
+      sendJsonResponse(requestId, body, statusCode || 400);
     }
 
     /**

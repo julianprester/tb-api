@@ -268,15 +268,18 @@ function resultResponse(result, errorStatusCode = 400) {
 }
 
 /**
- * Determine error status code from error message
+ * Build the standard error result shape shared by every domain module:
+ * { error, code, statusCode, suggestions? }.
+ *
+ * `code` is stable and machine-readable, `error` is human-readable, and
+ * `suggestions` is only present when a caller provides one. `statusCode` is
+ * internal metadata: `resultResponse` (background) and `sendCalendarResponse`
+ * (experiment) turn it into the HTTP status without serializing it.
  */
-function getErrorStatusFromMessage(errorMessage) {
-  if (!errorMessage) return 400;
-  const lower = errorMessage.toLowerCase();
-  if (lower.includes("not found")) return 404;
-  if (lower.includes("not available")) return 503;
-  if (lower.includes("unauthorized") || lower.includes("permission")) return 403;
-  return 400;
+function fail(code, message, statusCode = 400, suggestions) {
+  const result = { error: message, code, statusCode };
+  if (suggestions) result.suggestions = suggestions;
+  return result;
 }
 
 /**
@@ -301,7 +304,7 @@ var Utils = {
   fuzzyMatch,
   jsonResponse,
   errorResponse,
+  fail,
   resultResponse,
-  getErrorStatusFromMessage,
   didYouMean
 };

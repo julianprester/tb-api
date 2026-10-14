@@ -99,13 +99,13 @@ async function handleRequest(request) {
     if (path.startsWith("/contacts/") && method === "PATCH") {
       const contactId = decodeURIComponent(path.slice("/contacts/".length));
       const result = await Contacts.updateContact(contactId, params);
-      return Utils.resultResponse(result, Utils.getErrorStatusFromMessage(result.error || ""));
+      return Utils.resultResponse(result);
     }
 
     if (path.startsWith("/contacts/") && method === "DELETE") {
       const contactId = decodeURIComponent(path.slice("/contacts/".length));
       const result = await Contacts.deleteContact(contactId);
-      return Utils.resultResponse(result, Utils.getErrorStatusFromMessage(result.error || ""));
+      return Utils.resultResponse(result);
     }
 
     // Not found

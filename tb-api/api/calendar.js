@@ -254,10 +254,9 @@ function fuzzyMatchCalendar(input, candidates) {
  */
 function listCalendars(cal) {
   if (!cal) {
-    return { 
-      error: "Calendar not available",
-      suggestions: ["Ensure Thunderbird's calendar component is enabled"]
-    };
+    return Utils.fail("calendar_unavailable", "Calendar not available", 503, [
+      "Ensure Thunderbird's calendar component is enabled"
+    ]);
   }
 
   try {
@@ -270,16 +269,16 @@ function listCalendars(cal) {
     }));
     return { calendars };
   } catch (e) {
-    return { error: `Failed to list calendars: ${e.message}` };
+    return Utils.fail("list_failed", `Failed to list calendars: ${e.message}`, 500);
   }
 }
 
 /**
  * Find calendar by ID or name (with fuzzy matching)
- * Returns { calendar, error, suggestions } object
+ * Returns { calendar, error, code, statusCode, suggestions } object
  */
 function findCalendar(calendarId, cal) {
-  if (!cal) return { calendar: null, error: "Calendar not available" };
+  if (!cal) return { calendar: null, ...Utils.fail("calendar_unavailable", "Calendar not available", 503) };
   
   const calendars = cal.manager.getCalendars();
   
@@ -299,13 +298,12 @@ function findCalendar(calendarId, cal) {
   
   // Not found - provide helpful error
   const calendarNames = calendars.map(c => c.name);
-  return { 
-    calendar: null, 
-    error: `Calendar not found: "${calendarId}"`,
-    suggestions: [
+  return {
+    calendar: null,
+    ...Utils.fail("not_found", `Calendar not found: "${calendarId}"`, 404, [
       `Available calendars: ${calendarNames.join(", ") || "none"}`,
       "Use GET /calendars to see all available calendars with their IDs"
-    ]
+    ])
   };
 }
 
@@ -388,10 +386,9 @@ function itemToEvent(item, calendarId) {
  */
 async function listEvents(params, cal, Ci) {
   if (!cal) {
-    return { 
-      error: "Calendar not available",
-      suggestions: ["Ensure Thunderbird's calendar component is enabled"]
-    };
+    return Utils.fail("calendar_unavailable", "Calendar not available", 503, [
+      "Ensure Thunderbird's calendar component is enabled"
+    ]);
   }
 
   // Normalize parameter names
@@ -403,22 +400,16 @@ async function listEvents(params, cal, Ci) {
   const endDate = end ? parseFlexibleDate(end) : new Date(startDate.getTime() + 30 * 24 * 60 * 60 * 1000); // Default 30 days
 
   if (start && !startDate) {
-    return { 
-      error: `Invalid start date: "${start}"`,
-      suggestions: [
-        "Use ISO format: 2024-01-15 or 2024-01-15T10:30:00",
-        "Or relative: today, tomorrow, yesterday, next week, 2 days ago"
-      ]
-    };
+    return Utils.fail("invalid_date", `Invalid start date: "${start}"`, 400, [
+      "Use ISO format: 2024-01-15 or 2024-01-15T10:30:00",
+      "Or relative: today, tomorrow, yesterday, next week, 2 days ago"
+    ]);
   }
   if (end && !endDate) {
-    return { 
-      error: `Invalid end date: "${end}"`,
-      suggestions: [
-        "Use ISO format: 2024-01-15 or 2024-01-15T10:30:00",
-        "Or relative: today, tomorrow, in 2 weeks, next month"
-      ]
-    };
+    return Utils.fail("invalid_date", `Invalid end date: "${end}"`, 400, [
+      "Use ISO format: 2024-01-15 or 2024-01-15T10:30:00",
+      "Or relative: today, tomorrow, in 2 weeks, next month"
+    ]);
   }
 
   const rangeStart = cal.createDateTime();
@@ -434,7 +425,7 @@ async function listEvents(params, cal, Ci) {
   if (calendarId) {
     const found = findCalendar(calendarId, cal);
     if (!found.calendar) {
-      return { error: found.error, suggestions: found.suggestions };
+      return Utils.fail(found.code, found.error, found.statusCode, found.suggestions);
     }
     calendars = [found.calendar];
   } else {
@@ -478,10 +469,9 @@ async function listEvents(params, cal, Ci) {
  */
 async function upcomingEvents(params, cal, Ci) {
   if (!cal) {
-    return {
-      error: "Calendar not available",
-      suggestions: ["Ensure Thunderbird's calendar component is enabled"]
-    };
+    return Utils.fail("calendar_unavailable", "Calendar not available", 503, [
+      "Ensure Thunderbird's calendar component is enabled"
+    ]);
   }
 
   const normalized = normalizeCalendarParams(params);
@@ -500,7 +490,7 @@ async function upcomingEvents(params, cal, Ci) {
   if (calendarId) {
     const found = findCalendar(calendarId, cal);
     if (!found.calendar) {
-      return { error: found.error, suggestions: found.suggestions };
+      return Utils.fail(found.code, found.error, found.statusCode, found.suggestions);
     }
     calendars = [found.calendar];
   } else {
@@ -547,10 +537,9 @@ async function upcomingEvents(params, cal, Ci) {
  */
 async function createEvent(params, cal, Ci, Cc) {
   if (!cal) {
-    return { 
-      error: "Calendar not available",
-      suggestions: ["Ensure Thunderbird's calendar component is enabled"]
-    };
+    return Utils.fail("calendar_unavailable", "Calendar not available", 503, [
+      "Ensure Thunderbird's calendar component is enabled"
+    ]);
   }
 
   // Normalize parameter names
@@ -562,28 +551,21 @@ async function createEvent(params, cal, Ci, Cc) {
 
   // Validate required fields with helpful errors
   if (!title) {
-    return { 
-      error: "title is required",
-      suggestions: ["Provide a title/summary for the event"]
-    };
+    return Utils.fail("invalid_parameter", "title is required", 400, [
+      "Provide a title/summary for the event"
+    ]);
   }
   if (!start) {
-    return { 
-      error: "start date/time is required",
-      suggestions: [
-        "Use ISO format: 2024-01-15T10:00:00",
-        "Or relative: tomorrow, next monday"
-      ]
-    };
+    return Utils.fail("invalid_parameter", "start date/time is required", 400, [
+      "Use ISO format: 2024-01-15T10:00:00",
+      "Or relative: tomorrow, next monday"
+    ]);
   }
   if (!end) {
-    return { 
-      error: "end date/time is required",
-      suggestions: [
-        "Use ISO format: 2024-01-15T11:00:00",
-        "Or relative: tomorrow"
-      ]
-    };
+    return Utils.fail("invalid_parameter", "end date/time is required", 400, [
+      "Use ISO format: 2024-01-15T11:00:00",
+      "Or relative: tomorrow"
+    ]);
   }
 
   // Auto-select calendar if not specified
@@ -594,32 +576,25 @@ async function createEvent(params, cal, Ci, Cc) {
     if (writableCalendars.length === 1) {
       calendarId = writableCalendars[0].id;
     } else if (writableCalendars.length === 0) {
-      return { 
-        error: "No writable calendars available",
-        suggestions: ["Create a local calendar in Thunderbird first"]
-      };
+      return Utils.fail("read_only", "No writable calendars available", 403, [
+        "Create a local calendar in Thunderbird first"
+      ]);
     } else {
-      return { 
-        error: "calendar is required when multiple writable calendars exist",
-        suggestions: [
-          `Available writable calendars: ${writableCalendars.map(c => c.name).join(", ")}`,
-          "Use GET /calendars to see calendar IDs"
-        ]
-      };
+      return Utils.fail("ambiguous_target", "calendar is required when multiple writable calendars exist", 409, [
+        `Available writable calendars: ${writableCalendars.map(c => c.name).join(", ")}`,
+        "Use GET /calendars to see calendar IDs"
+      ]);
     }
   }
 
   const found = findCalendar(calendarId, cal);
   if (!found.calendar) {
-    return { error: found.error, suggestions: found.suggestions };
+    return Utils.fail(found.code, found.error, found.statusCode, found.suggestions);
   }
   if (found.calendar.readOnly) {
-    return { 
-      error: `Calendar "${found.calendar.name}" is read-only`,
-      suggestions: [
-        `Writable calendars: ${writableCalendars.map(c => c.name).join(", ") || "none"}`
-      ]
-    };
+    return Utils.fail("read_only", `Calendar "${found.calendar.name}" is read-only`, 403, [
+      `Writable calendars: ${writableCalendars.map(c => c.name).join(", ") || "none"}`
+    ]);
   }
 
   // Parse dates with flexible parsing
@@ -627,30 +602,23 @@ async function createEvent(params, cal, Ci, Cc) {
   const endDate = parseFlexibleDate(end);
 
   if (!startDate) {
-    return { 
-      error: `Invalid start date: "${start}"`,
-      suggestions: [
-        "Use ISO format: 2024-01-15T10:00:00",
-        "Or relative: tomorrow, next monday, in 2 days"
-      ]
-    };
+    return Utils.fail("invalid_date", `Invalid start date: "${start}"`, 400, [
+      "Use ISO format: 2024-01-15T10:00:00",
+      "Or relative: tomorrow, next monday, in 2 days"
+    ]);
   }
   if (!endDate) {
-    return { 
-      error: `Invalid end date: "${end}"`,
-      suggestions: [
-        "Use ISO format: 2024-01-15T11:00:00",
-        "Or relative: tomorrow"
-      ]
-    };
+    return Utils.fail("invalid_date", `Invalid end date: "${end}"`, 400, [
+      "Use ISO format: 2024-01-15T11:00:00",
+      "Or relative: tomorrow"
+    ]);
   }
 
   // Validate end is after start
   if (endDate <= startDate) {
-    return {
-      error: "End date must be after start date",
-      suggestions: [`Start: ${startDate.toISOString()}, End: ${endDate.toISOString()}`]
-    };
+    return Utils.fail("invalid_date", "End date must be after start date", 400, [
+      `Start: ${startDate.toISOString()}, End: ${endDate.toISOString()}`
+    ]);
   }
 
   try {
@@ -675,12 +643,9 @@ async function createEvent(params, cal, Ci, Cc) {
       const orgName = typeof organizer === "string" ? null : (organizer.name || null);
       
       if (!orgEmail) {
-        return {
-          error: "Organizer email is required",
-          suggestions: [
-            'Provide organizer as string "email@example.com" or object {"email": "...", "name": "..."}'
-          ]
-        };
+        return Utils.fail("invalid_parameter", "Organizer email is required", 400, [
+          'Provide organizer as string "email@example.com" or object {"email": "...", "name": "..."}'
+        ]);
       }
       
       org.id = "mailto:" + orgEmail;
@@ -693,13 +658,10 @@ async function createEvent(params, cal, Ci, Cc) {
     // Add attendees if provided
     if (attendees) {
       if (!Array.isArray(attendees)) {
-        return {
-          error: "Attendees must be an array",
-          suggestions: [
-            'Provide attendees as array: [{"email": "...", "name": "..."}, ...]',
-            'Or simplified: ["email1@example.com", "email2@example.com"]'
-          ]
-        };
+        return Utils.fail("invalid_parameter", "Attendees must be an array", 400, [
+          'Provide attendees as array: [{"email": "...", "name": "..."}, ...]',
+          'Or simplified: ["email1@example.com", "email2@example.com"]'
+        ]);
       }
 
       for (const att of attendees) {
@@ -713,12 +675,9 @@ async function createEvent(params, cal, Ci, Cc) {
         const attRsvp = typeof att === "string" ? true : (att.rsvp !== false);
         
         if (!attEmail) {
-          return {
-            error: "Each attendee must have an email address",
-            suggestions: [
-              'Provide attendee as string "email@example.com" or object {"email": "...", "name": "..."}'
-            ]
-          };
+          return Utils.fail("invalid_parameter", "Each attendee must have an email address", 400, [
+            'Provide attendee as string "email@example.com" or object {"email": "...", "name": "..."}'
+          ]);
         }
         
         attendee.id = "mailto:" + attEmail;
@@ -795,7 +754,7 @@ async function createEvent(params, cal, Ci, Cc) {
 
     return response;
   } catch (e) {
-    return { error: `Failed to create event: ${e.message}` };
+    return Utils.fail("create_failed", `Failed to create event: ${e.message}`, 500);
   }
 }
 
@@ -805,10 +764,9 @@ async function createEvent(params, cal, Ci, Cc) {
  */
 async function updateEvent(eventId, params, cal, Ci, Cc) {
   if (!cal) {
-    return { 
-      error: "Calendar not available",
-      suggestions: ["Ensure Thunderbird's calendar component is enabled"]
-    };
+    return Utils.fail("calendar_unavailable", "Calendar not available", 503, [
+      "Ensure Thunderbird's calendar component is enabled"
+    ]);
   }
 
   // Normalize parameter names
@@ -818,39 +776,35 @@ async function updateEvent(eventId, params, cal, Ci, Cc) {
   if (!calendarId) {
     // Try to help by listing calendars
     const calendars = cal.manager.getCalendars();
-    return { 
-      error: "calendar parameter is required to identify which calendar contains the event",
-      suggestions: [
+    return Utils.fail(
+      "invalid_parameter",
+      "calendar parameter is required to identify which calendar contains the event",
+      400,
+      [
         `Available calendars: ${calendars.map(c => c.name).join(", ") || "none"}`,
         "Use GET /calendars to see calendar IDs"
       ]
-    };
+    );
   }
 
   const found = findCalendar(calendarId, cal);
   if (!found.calendar) {
-    return { error: found.error, suggestions: found.suggestions };
+    return Utils.fail(found.code, found.error, found.statusCode, found.suggestions);
   }
   if (found.calendar.readOnly) {
     const writableCalendars = cal.manager.getCalendars().filter(c => !c.readOnly);
-    return { 
-      error: `Calendar "${found.calendar.name}" is read-only`,
-      suggestions: [
-        `Writable calendars: ${writableCalendars.map(c => c.name).join(", ") || "none"}`
-      ]
-    };
+    return Utils.fail("read_only", `Calendar "${found.calendar.name}" is read-only`, 403, [
+      `Writable calendars: ${writableCalendars.map(c => c.name).join(", ") || "none"}`
+    ]);
   }
 
   try {
     const event = await found.calendar.getItem(eventId);
     if (!event) {
-      return { 
-        error: `Event not found: "${eventId}"`,
-        suggestions: [
-          `Event ID was not found in calendar "${found.calendar.name}"`,
-          "Use GET /events to list events and get valid event IDs"
-        ]
-      };
+      return Utils.fail("not_found", `Event not found: "${eventId}"`, 404, [
+        `Event ID was not found in calendar "${found.calendar.name}"`,
+        "Use GET /events to list events and get valid event IDs"
+      ]);
     }
 
     const newEvent = event.clone();
@@ -859,13 +813,10 @@ async function updateEvent(eventId, params, cal, Ci, Cc) {
     if (start !== undefined) {
       const startDate = parseFlexibleDate(start);
       if (!startDate) {
-        return { 
-          error: `Invalid start date: "${start}"`,
-          suggestions: [
-            "Use ISO format: 2024-01-15T10:00:00",
-            "Or relative: tomorrow, next monday"
-          ]
-        };
+        return Utils.fail("invalid_date", `Invalid start date: "${start}"`, 400, [
+          "Use ISO format: 2024-01-15T10:00:00",
+          "Or relative: tomorrow, next monday"
+        ]);
       }
       newEvent.startDate = cal.createDateTime();
       newEvent.startDate.nativeTime = startDate.getTime() * 1000;
@@ -873,13 +824,10 @@ async function updateEvent(eventId, params, cal, Ci, Cc) {
     if (end !== undefined) {
       const endDate = parseFlexibleDate(end);
       if (!endDate) {
-        return { 
-          error: `Invalid end date: "${end}"`,
-          suggestions: [
-            "Use ISO format: 2024-01-15T11:00:00",
-            "Or relative: tomorrow"
-          ]
-        };
+        return Utils.fail("invalid_date", `Invalid end date: "${end}"`, 400, [
+          "Use ISO format: 2024-01-15T11:00:00",
+          "Or relative: tomorrow"
+        ]);
       }
       newEvent.endDate = cal.createDateTime();
       newEvent.endDate.nativeTime = endDate.getTime() * 1000;
@@ -898,12 +846,9 @@ async function updateEvent(eventId, params, cal, Ci, Cc) {
         const orgName = typeof organizer === "string" ? null : (organizer.name || null);
         
         if (!orgEmail) {
-          return {
-            error: "Organizer email is required",
-            suggestions: [
-              'Provide organizer as string "email@example.com" or object {"email": "...", "name": "..."}'
-            ]
-          };
+          return Utils.fail("invalid_parameter", "Organizer email is required", 400, [
+            'Provide organizer as string "email@example.com" or object {"email": "...", "name": "..."}'
+          ]);
         }
         
         org.id = "mailto:" + orgEmail;
@@ -979,7 +924,7 @@ async function updateEvent(eventId, params, cal, Ci, Cc) {
 
     return response;
   } catch (e) {
-    return { error: `Failed to update event: ${e.message}` };
+    return Utils.fail("update_failed", `Failed to update event: ${e.message}`, 500);
   }
 }
 
@@ -989,10 +934,9 @@ async function updateEvent(eventId, params, cal, Ci, Cc) {
  */
 async function deleteEvent(eventId, params, cal) {
   if (!cal) {
-    return { 
-      error: "Calendar not available",
-      suggestions: ["Ensure Thunderbird's calendar component is enabled"]
-    };
+    return Utils.fail("calendar_unavailable", "Calendar not available", 503, [
+      "Ensure Thunderbird's calendar component is enabled"
+    ]);
   }
 
   // Normalize parameter names
@@ -1001,39 +945,35 @@ async function deleteEvent(eventId, params, cal) {
 
   if (!calendarId) {
     const calendars = cal.manager.getCalendars();
-    return { 
-      error: "calendar parameter is required to identify which calendar contains the event",
-      suggestions: [
+    return Utils.fail(
+      "invalid_parameter",
+      "calendar parameter is required to identify which calendar contains the event",
+      400,
+      [
         `Available calendars: ${calendars.map(c => c.name).join(", ") || "none"}`,
         "Use GET /calendars to see calendar IDs"
       ]
-    };
+    );
   }
 
   const found = findCalendar(calendarId, cal);
   if (!found.calendar) {
-    return { error: found.error, suggestions: found.suggestions };
+    return Utils.fail(found.code, found.error, found.statusCode, found.suggestions);
   }
   if (found.calendar.readOnly) {
     const writableCalendars = cal.manager.getCalendars().filter(c => !c.readOnly);
-    return { 
-      error: `Calendar "${found.calendar.name}" is read-only`,
-      suggestions: [
-        `Writable calendars: ${writableCalendars.map(c => c.name).join(", ") || "none"}`
-      ]
-    };
+    return Utils.fail("read_only", `Calendar "${found.calendar.name}" is read-only`, 403, [
+      `Writable calendars: ${writableCalendars.map(c => c.name).join(", ") || "none"}`
+    ]);
   }
 
   try {
     const event = await found.calendar.getItem(eventId);
     if (!event) {
-      return { 
-        error: `Event not found: "${eventId}"`,
-        suggestions: [
-          `Event ID was not found in calendar "${found.calendar.name}"`,
-          "Use GET /events to list events and get valid event IDs"
-        ]
-      };
+      return Utils.fail("not_found", `Event not found: "${eventId}"`, 404, [
+        `Event ID was not found in calendar "${found.calendar.name}"`,
+        "Use GET /events to list events and get valid event IDs"
+      ]);
     }
 
     const eventTitle = event.title;
@@ -1045,7 +985,7 @@ async function deleteEvent(eventId, params, cal) {
       title: eventTitle
     };
   } catch (e) {
-    return { error: `Failed to delete event: ${e.message}` };
+    return Utils.fail("delete_failed", `Failed to delete event: ${e.message}`, 500);
   }
 }
 
