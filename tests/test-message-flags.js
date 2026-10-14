@@ -228,6 +228,32 @@ test("answered/forwarded come from the experiment's Replied/Forwarded bits", asy
   assert.deepEqual(requested.sort(), [1, 2, 3, 4], "the experiment reads numeric tracker IDs");
 });
 
+test("GET /messages/:id reports answered/forwarded like search", async () => {
+  const flagsById = new Map([[1, 0x2 | 0x1000]]);
+  const requested = [];
+  const h = experimentHarness({
+    messages: [makeMessage(1)],
+    messageManager: {
+      get(id) {
+        requested.push(id);
+        return flagsById.has(id) ? { flags: flagsById.get(id) } : null;
+      }
+    }
+  });
+
+  const message = await h.Email.getMessage(1);
+  assert.equal(message.answered, true);
+  assert.equal(message.forwarded, true);
+  assert.deepEqual(plain(message.flags), ["answered", "forwarded"]);
+  assert.deepEqual(requested, [1], "the single-message path uses the numeric tracker ID");
+
+  const viaHttp = await h.request("GET", "/messages/1");
+  assert.equal(viaHttp.status, 200);
+  assert.equal(viaHttp.body.answered, true);
+  assert.equal(viaHttp.body.forwarded, true);
+  assert.deepEqual(viaHttp.body.flags, ["answered", "forwarded"]);
+});
+
 test("answered/forwarded are omitted when the message manager is unavailable", async () => {
   const h = experimentHarness({ messages: [makeMessage(1)] }); // no messageManager option
 
@@ -239,6 +265,11 @@ test("answered/forwarded are omitted when the message manager is unavailable", a
   assert.equal(Object.hasOwn(message, "answered"), false);
   assert.equal(Object.hasOwn(message, "forwarded"), false);
   assert.deepEqual(plain(message.flags), [], "unknown flags never appear in flags");
+
+  const single = await h.Email.getMessage(1);
+  assert.equal(Object.hasOwn(single, "answered"), false);
+  assert.equal(Object.hasOwn(single, "forwarded"), false);
+  assert.deepEqual(plain(single.flags), [], "the single-message path stays honest too");
 });
 
 test("a throwing message manager lookup omits only that message's flags", async () => {

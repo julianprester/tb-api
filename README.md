@@ -260,7 +260,7 @@ in full afterwards.
 GET /messages/:message_id
 ```
 
-Returns full message content including body and attachments. The `message_id` is the Message-ID header value (URL-encoded). Angle brackets are optional: Thunderbird stores Message-IDs without them, and the API compares the text exactly, so `<abc123@example.com>`, `abc123@example.com` and surrounding whitespace are equivalent. The response includes the boolean `read` and `draft` fields and a `flags` array (`read`, `flagged`, `junk`, `draft`).
+Returns full message content including body and attachments. The `message_id` is the Message-ID header value (URL-encoded). Angle brackets are optional: Thunderbird stores Message-IDs without them, and the API compares the text exactly, so `<abc123@example.com>`, `abc123@example.com` and surrounding whitespace are equivalent. The response includes the boolean `read` and `draft` fields and a `flags` array (`read`, `flagged`, `junk`, `draft`, plus `answered`/`forwarded` when Thunderbird can report them; an absent `answered`/`forwarded` means unknown, not `false`).
 
 If the same Message-ID appears in several folders (for example an Inbox copy and an archived copy), the first match is returned and the response includes `matches`, the number of copies found. `matches` counts the copies in the first query page (Thunderbird returns one page per query); an internal numeric ID is looked up directly and reports `matches: 1`. To choose a specific copy, search by `mailbox` first and use the internal `id` from the result (a `mailbox` parameter for GET/PATCH is a planned follow-up). `PATCH` changes only the first match of a Message-ID.
 

@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.2] - 2026-10-15
+
+### Fixed
+
+- `GET /messages/:id` now reports `answered`/`forwarded` and includes them in
+  `flags` exactly like search, instead of omitting them on the single-message
+  path. Unknown values stay absent rather than being reported as `false`.
+
 ## [3.0.1] - 2026-10-14
 
 ### Fixed

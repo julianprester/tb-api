@@ -208,6 +208,22 @@ async function loadHeaderFlags(ids) {
 }
 
 /**
+ * Merge one experiment flag result into a formatted message. An unknown flag
+ * stays absent; only a boolean is reported, and a true bit joins `flags`.
+ */
+function applyHeaderFlags(message, derived) {
+  if (!derived) return;
+  if (typeof derived.answered === "boolean") {
+    message.answered = derived.answered;
+    if (derived.answered) message.flags.push("answered");
+  }
+  if (typeof derived.forwarded === "boolean") {
+    message.forwarded = derived.forwarded;
+    if (derived.forwarded) message.flags.push("forwarded");
+  }
+}
+
+/**
  * Search messages with flexible parameter handling
  */
 async function searchMessages(params) {
@@ -453,16 +469,7 @@ async function searchMessages(params) {
   const headerFlags = await loadHeaderFlags(matches.map(msg => String(msg.id)));
   if (headerFlags) {
     for (const message of formatted) {
-      const derived = headerFlags[String(message.id)];
-      if (!derived) continue;
-      if (typeof derived.answered === "boolean") {
-        message.answered = derived.answered;
-        if (derived.answered) message.flags.push("answered");
-      }
-      if (typeof derived.forwarded === "boolean") {
-        message.forwarded = derived.forwarded;
-        if (derived.forwarded) message.flags.push("forwarded");
-      }
+      applyHeaderFlags(message, headerFlags[String(message.id)]);
     }
   }
 
@@ -519,7 +526,7 @@ async function getMessage(messageId) {
     }
   } catch (e) {}
 
-  return {
+  const message = {
     id: msg.id,
     message_id: msg.headerMessageId,
     date: msg.date ? new Date(msg.date).toISOString() : null,
@@ -541,6 +548,16 @@ async function getMessage(messageId) {
     in_reply_to: full.headers?.["in-reply-to"]?.[0] || null,
     references: full.headers?.["references"]?.[0]?.split(/\s+/) || []
   };
+
+  // Replied/Forwarded live on Thunderbird's message manager, same as the
+  // search path. When it is unavailable the keys stay absent rather than
+  // being reported as false.
+  const headerFlags = await loadHeaderFlags([String(msg.id)]);
+  if (headerFlags) {
+    applyHeaderFlags(message, headerFlags[String(msg.id)]);
+  }
+
+  return message;
 }
 
 /**
