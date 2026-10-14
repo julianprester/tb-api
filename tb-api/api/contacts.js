@@ -68,8 +68,8 @@ async function resolveAddressBookWithSuggestions(addressbook) {
  */
 async function searchContacts(params) {
   // Normalize parameters
-  const normalized = Utils.normalizeParams(params, Utils.PARAM_ALIASES);
-  const { q, addressbook, limit = 50 } = normalized;
+  const normalized = Utils.normalizeParams(params, Utils.ALIASES.contacts);
+  const { query, addressbook, limit = 50 } = normalized;
   const parsedLimit = parseInt(limit, 10);
   const maxResults = Math.min(Math.max(parsedLimit > 0 ? parsedLimit : 50, 1), 100);
 
@@ -91,8 +91,8 @@ async function searchContacts(params) {
   }
 
   // Filter by query
-  if (q) {
-    const lower = q.toLowerCase();
+  if (query) {
+    const lower = query.toLowerCase();
     contacts = contacts.filter(c => {
       const props = c.properties || {};
       return (props.PrimaryEmail || "").toLowerCase().includes(lower) ||
@@ -105,7 +105,7 @@ async function searchContacts(params) {
   // Provide helpful feedback if no results
   if (contacts.length === 0) {
     const hints = [];
-    if (q) hints.push(`No contacts match "${q}"`);
+    if (query) hints.push(`No contacts match "${query}"`);
     if (addressbook) hints.push("Try searching in all address books (omit addressbook parameter)");
     
     return {
@@ -131,7 +131,7 @@ async function searchContacts(params) {
  */
 async function createContact(params) {
   // Normalize parameters
-  const normalized = Utils.normalizeParams(params, Utils.PARAM_ALIASES);
+  const normalized = Utils.normalizeParams(params, Utils.ALIASES.contacts);
   let { addressbook, email, firstName, lastName, displayName } = normalized;
 
   // Auto-select first writable address book if not specified
@@ -219,7 +219,7 @@ async function createContact(params) {
  */
 async function updateContact(contactId, params) {
   // Normalize parameters
-  const normalized = Utils.normalizeParams(params, Utils.PARAM_ALIASES);
+  const normalized = Utils.normalizeParams(params, Utils.ALIASES.contacts);
   const { email, firstName, lastName, displayName } = normalized;
 
   try {

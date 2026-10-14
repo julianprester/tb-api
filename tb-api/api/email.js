@@ -44,7 +44,7 @@ async function refresh_folder(folderId, { timeoutMs } = {}) {
  * Explicit refresh endpoint, accepting the same mailbox aliases as search.
  */
 async function refreshMailbox(params) {
-  const normalized = Utils.normalizeParams(params, Utils.PARAM_ALIASES);
+  const normalized = Utils.normalizeParams(params, Utils.ALIASES.emailSearch);
   if (!normalized.mailbox) {
     return Utils.fail(
       "missing_mailbox",
@@ -63,7 +63,7 @@ async function refreshMailbox(params) {
  */
 async function searchMessages(params) {
   // Normalize parameters - accept common aliases
-  const normalized = Utils.normalizeParams(params, Utils.PARAM_ALIASES);
+  const normalized = Utils.normalizeParams(params, Utils.ALIASES.emailSearch);
   const { text, from, to, subject, mailbox, after, before, limit = 50 } = normalized;
   const parsedLimit = parseInt(limit, 10);
   const maxResults = Math.min(Math.max(parsedLimit > 0 ? parsedLimit : 50, 1), 100);
@@ -377,11 +377,7 @@ async function prependBodyToCompose(tabId, userText) {
  */
 async function composeMessage(params) {
   // Normalize parameters
-  const normalized = Utils.normalizeParams(params, {
-    ...Utils.PARAM_ALIASES,
-    in_reply_to: ["inReplyTo", "reply_to", "replyTo"],
-    forward_of: ["forwardOf", "forward"]
-  });
+  const normalized = Utils.normalizeParams(params, Utils.ALIASES.compose);
   let { to, cc, bcc, subject, body, identity, in_reply_to, forward_of } = normalized;
 
   // Validate: for new messages, 'to' is required; for replies/forwards it's optional

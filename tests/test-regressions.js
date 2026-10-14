@@ -4,7 +4,6 @@
 // Each case is added by the task that fixes it; this file was created by Task
 // 2.1. Cases not yet present, with their owning task:
 //
-//   2.4  GET /contacts?q=alice returns only Alice
 //   2.5  before=next week parses for email (and the end-to-end date parsing for
 //        end=next+week / start=next monday, which needs Utils.parseDate)
 //   3.1  GET /messages/%3Cid%3E and PATCH ids:["<id>"] find the message
@@ -26,6 +25,29 @@ test("2.1: end=next+week decodes to \"next week\"", () => {
   const h = backgroundHarness();
   assert.deepEqual(plain(h.Utils.parseQueryString("end=next+week")), { end: "next week" });
   assert.deepEqual(plain(h.Utils.parseRequestParams("end=next+week", "")), { end: "next week" });
+});
+
+test("2.4: GET /contacts?q=alice returns only Alice", async () => {
+  const h = backgroundHarness({
+    messenger: {
+      addressBooks: {
+        async list() { return [{ id: "book1", name: "Personal", readOnly: false }]; }
+      },
+      contacts: {
+        async list() {
+          return [
+            { id: "alice", parentId: "book1", properties: { PrimaryEmail: "alice@example.test", DisplayName: "Alice Anderson" } },
+            { id: "bob", parentId: "book1", properties: { PrimaryEmail: "bob@example.test", DisplayName: "Bob Brown" } }
+          ];
+        }
+      }
+    }
+  });
+
+  const result = await h.request("GET", "/contacts", "q=alice");
+  assert.equal(result.status, 200);
+  assert.equal(result.body.total, 1);
+  assert.deepEqual(result.body.contacts.map(contact => contact.id), ["alice"]);
 });
 
 test("Malformed JSON / bad % on /events → 400 (no hang, no pending leak)", async t => {

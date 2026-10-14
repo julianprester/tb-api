@@ -149,41 +149,62 @@ function normalizeParams(params, aliases) {
 }
 
 /**
- * Common parameter aliases across the API
+ * Per-domain parameter aliases.
+ *
+ * A single global table renamed conflicting names for every endpoint: `q`
+ * became `text` even for contacts, so GET /contacts?q= filtered on nothing,
+ * and `start` meant both "search after this date" (email) and "event start"
+ * (calendar). Each endpoint now picks the table matching its domain.
  */
-const PARAM_ALIASES = {
-  // Email search
-  text: ["q", "query", "search", "keyword", "keywords"],
-  from: ["sender", "author"],
-  to: ["recipient", "recipients"],
-  mailbox: ["folder", "mailboxId", "folderId", "box"],
-  after: ["since", "from_date", "fromDate", "start", "startDate"],
-  before: ["until", "to_date", "toDate", "end", "endDate"],
-  limit: ["max", "count", "size", "maxResults"],
-  timeoutMs: ["timeout_ms", "timeout"],
-  unread: ["unread", "unseen"],
-  read: ["seen", "opened"],
-  flagged: ["starred", "important", "flag"],
-  junk: ["spam"],
-  
-  // Message compose (note: "text" removed as alias to avoid conflict with email search)
-  body: ["content", "message"],
-  subject: ["title", "subj"],
-  
-  // Contacts
-  addressbook: ["addressBook", "book", "bookId", "addressBookId"],
-  firstName: ["first_name", "givenName", "given_name", "first"],
-  lastName: ["last_name", "familyName", "family_name", "last", "surname"],
-  displayName: ["display_name", "name", "fullName", "full_name"],
-  email: ["emailAddress", "email_address", "mail"],
-  
-  // Calendar (note: "to" and "from" removed as aliases to avoid conflict with email)
-  calendar: ["calendarId", "calendar_id", "cal"],
-  title: ["summary", "eventName"],
-  start: ["startDate", "start_date", "startTime", "start_time", "begin"],
-  end: ["endDate", "end_date", "endTime", "end_time", "until", "finish"],
-  location: ["place", "where"],
-  description: ["desc", "details", "notes"]
+const ALIASES = {
+  // GET /messages, POST /mailboxes/refresh
+  emailSearch: {
+    text: ["q", "query", "search", "keyword", "keywords"],
+    from: ["sender", "author"],
+    to: ["recipient", "recipients"],
+    subject: ["subj"],
+    mailbox: ["folder", "mailboxId", "folderId", "box"],
+    after: ["since", "from_date", "fromDate", "start", "startDate"],
+    before: ["until", "to_date", "toDate", "end", "endDate"],
+    limit: ["max", "count", "size", "maxResults"],
+    timeoutMs: ["timeout_ms", "timeout"],
+    unread: ["unseen"],
+    read: ["seen", "opened"],
+    flagged: ["starred", "important", "flag"],
+    junk: ["spam"],
+  },
+  // POST /messages (note: "text" is not a body alias, to avoid the search
+  // conflict the global table had)
+  compose: {
+    body: ["content", "message"],
+    subject: ["title", "subj"],
+    in_reply_to: ["inReplyTo", "reply_to", "replyTo"],
+    forward_of: ["forwardOf", "forward"],
+  },
+  // GET/POST /contacts, PATCH /contacts/:id. `query` is canonical here: `q`
+  // previously became `text`, which searchContacts never read.
+  contacts: {
+    query: ["q", "search", "text"],
+    addressbook: ["addressBook", "book", "bookId", "addressBookId"],
+    firstName: ["first_name", "givenName", "given_name", "first"],
+    lastName: ["last_name", "familyName", "family_name", "last", "surname"],
+    displayName: ["display_name", "name", "fullName", "full_name"],
+    email: ["emailAddress", "email_address", "mail"],
+    limit: ["max", "count", "size", "maxResults"],
+  },
+  // Calendar events. Moved verbatim from normalizeCalendarParams in
+  // calendar.js; Task 2.5 wires calendar.js onto this table.
+  calendar: {
+    calendar: ["calendarId", "calendar_id", "cal"],
+    title: ["summary", "name", "eventName", "event_name"],
+    start: ["startDate", "start_date", "startTime", "start_time", "from", "begin"],
+    end: ["endDate", "end_date", "endTime", "end_time", "to", "until"],
+    location: ["place", "where", "loc"],
+    description: ["desc", "details", "notes", "body", "content"],
+    organizer: ["host", "owner", "creator"],
+    attendees: ["participants", "invitees", "guests", "people"],
+    sendInvites: ["send_invites", "sendInvitations", "send_invitations", "notify"]
+  }
 };
 
 /**
@@ -300,7 +321,7 @@ var Utils = {
   parseRequestParams,
   parseDate,
   normalizeParams,
-  PARAM_ALIASES,
+  ALIASES,
   fuzzyMatch,
   jsonResponse,
   errorResponse,
