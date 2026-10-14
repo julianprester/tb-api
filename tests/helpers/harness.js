@@ -602,6 +602,14 @@ function createCalendarItem(spec = {}) {
       copy.title = this.title;
       copy._properties = { ...this._properties };
       copy._attendees = [...this._attendees];
+      // A clone keeps the whole item, like Thunderbird's own item clone: a
+      // provider round-trip must not silently drop dates or the organizer.
+      copy.startDate = this.startDate ? this.startDate.clone() : null;
+      copy.endDate = this.endDate ? this.endDate.clone() : null;
+      copy.organizer = this.organizer;
+      copy.recurrenceId = this.recurrenceId
+        ? (this.recurrenceId.clone ? this.recurrenceId.clone() : this.recurrenceId)
+        : null;
       copy.recurrenceInfo = this.recurrenceInfo?.clone?.() || this.recurrenceInfo;
       // Occurrences inherit from the parent they end up attached to.
       if (copy.recurrenceInfo) copy.recurrenceInfo.parentItem = copy;
@@ -706,9 +714,14 @@ function createFakeCal(options = {}) {
         return results;
       },
       async addItem(item) {
-        if (!item.id) item.id = `item-${++uuidCounter}`;
-        this.items.push(item);
-        return item;
+        // Thunderbird returns the item it saved, which is a distinct object
+        // from the pre-save one (and may carry a provider-assigned id). The
+        // fake returns a real clone so a caller that serializes the wrong
+        // object cannot pass the invitation UID test by accident (M11).
+        const saved = item.clone();
+        if (!saved.id) saved.id = `item-${++uuidCounter}`;
+        this.items.push(saved);
+        return saved;
       },
       async modifyItem(newItem, oldItem) {
         const at = this.items.indexOf(oldItem);

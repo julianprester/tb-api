@@ -218,6 +218,7 @@ test("the ICS is serialized from the saved item and its UID is the event id", as
   const serializer = h.icsSerializers[0];
   assert.equal(serializer.items.length, 1);
   assert.equal(serializer.items[0], savedItem, "serializer.addItems receives the item addItem returned");
+  assert.notEqual(serializer.items[0], addCalls[0], "the pre-save object is not what was serialized");
   assert.deepEqual(
     serializer.properties.map(property => [property.propertyName, property.value]),
     [["METHOD", "REQUEST"]]
