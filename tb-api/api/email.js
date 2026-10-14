@@ -193,6 +193,24 @@ async function collectNewest(queryInfo, limit, ascending = false) {
 }
 
 /**
+ * Ask the experiment for Replied/Forwarded state of one page of messages.
+ *
+ * MessageHeader does not expose those flags, but the experiment can read
+ * Thunderbird's own message manager through `getMessageFlags`. Returns null
+ * when that path is unavailable or fails, so the caller omits `answered` and
+ * `forwarded` rather than claiming a false value.
+ */
+async function loadHeaderFlags(ids) {
+  if (ids.length === 0) return null;
+  try {
+    const result = await browser.httpServer.getMessageFlags(ids);
+    return result && typeof result === "object" ? result : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
  * Search messages with flexible parameter handling
  */
 async function searchMessages(params) {
@@ -218,6 +236,16 @@ async function searchMessages(params) {
     if (val === true || val === 1 || val === "true" || val === "1") return true;
     if (val === false || val === 0 || val === "false" || val === "0") return false;
     return undefined;
+  }
+  // include_preview defaults to true so the response shape is unchanged unless
+  // a caller explicitly opts out of reading message bodies.
+  const includePreview = normalized.include_preview === undefined
+    ? true
+    : parseBool(normalized.include_preview);
+  if (includePreview === undefined) {
+    return Utils.fail("invalid_filter", "include_preview must be true, false, 1 or 0", 400, [
+      "Use include_preview=true or include_preview=false"
+    ]);
   }
   const refreshRequested = normalized.refresh === undefined ? false : parseBool(normalized.refresh);
   if (refreshRequested === undefined) {
@@ -344,23 +372,36 @@ async function searchMessages(params) {
     formatted.push(...await Promise.all(
       matches.slice(start, start + SEARCH_MIME_CONCURRENCY).map(async (msg) => {
         let preview = "";
-        try {
-          const parts = await messenger.messages.listInlineTextParts(msg.id);
-          if (parts && parts.length > 0) {
-            const plainPart = parts.find(p => p.contentType === "text/plain");
-            if (plainPart && plainPart.content) {
-              preview = plainPart.content.substring(0, 500);
-            } else {
-              // Fall back to HTML part if no plain text available
-              const htmlPart = parts.find(p => p.contentType === "text/html");
-              if (htmlPart && htmlPart.content) {
-                const plainText = await messenger.messengerUtilities.convertToPlainText(htmlPart.content);
-                preview = plainText.substring(0, 500);
+        let hasAttachment = false;
+        if (includePreview) {
+          try {
+            const parts = await messenger.messages.listInlineTextParts(msg.id);
+            if (parts && parts.length > 0) {
+              const plainPart = parts.find(p => p.contentType === "text/plain");
+              if (plainPart && plainPart.content) {
+                preview = plainPart.content.substring(0, 500);
+              } else {
+                // Fall back to HTML part if no plain text available
+                const htmlPart = parts.find(p => p.contentType === "text/html");
+                if (htmlPart && htmlPart.content) {
+                  const plainText = await messenger.messengerUtilities.convertToPlainText(htmlPart.content);
+                  preview = plainText.substring(0, 500);
+                }
               }
             }
-          }
-        } catch (e) {}
+          } catch (e) {}
+          // Whether a message has attachments also lives in the MIME tree,
+          // so it is discovered in the same task (and concurrency slot) as
+          // the preview instead of a second pass over the page.
+          try {
+            const attachments = await messenger.messages.listAttachments(msg.id);
+            hasAttachment = Array.isArray(attachments) && attachments.length > 0;
+          } catch (e) {}
+        }
 
+        // MessageHeader has no draft field (Appendix A.2); the folder's
+        // special use is the honest source.
+        const draft = isDraftFolder(msg.folder);
         return {
           id: msg.id,
           message_id: msg.headerMessageId,
@@ -369,10 +410,13 @@ async function searchMessages(params) {
           to: cleanAddressList(msg.recipients),
           subject: msg.subject,
           read: !!msg.read,
-          flags: getFlags(msg),
+          draft,
+          flags: getFlags(msg, draft),
           mailbox: msg.folder?.name || "",
-          has_attachment: msg.attachments?.length > 0 || false,
-          preview
+          // Omitting both keys (rather than returning empty values) is the
+          // contract of include_preview=false: no body was read, so the
+          // response claims nothing about preview or attachments.
+          ...(includePreview ? { has_attachment: hasAttachment, preview } : {})
         };
       })
     ));
@@ -395,6 +439,25 @@ async function searchMessages(params) {
       hints: hints.length > 0 ? hints : ["No messages match your search criteria"],
       ...meta
     };
+  }
+
+  // Replied/Forwarded live only on Thunderbird's message manager, and one
+  // experiment call covers the whole page. When that path is unavailable the
+  // keys stay absent: an unknown flag must never be reported as false.
+  const headerFlags = await loadHeaderFlags(matches.map(msg => String(msg.id)));
+  if (headerFlags) {
+    for (const message of formatted) {
+      const derived = headerFlags[String(message.id)];
+      if (!derived) continue;
+      if (typeof derived.answered === "boolean") {
+        message.answered = derived.answered;
+        if (derived.answered) message.flags.push("answered");
+      }
+      if (typeof derived.forwarded === "boolean") {
+        message.forwarded = derived.forwarded;
+        if (derived.forwarded) message.flags.push("forwarded");
+      }
+    }
   }
 
   return {
@@ -431,6 +494,7 @@ async function getMessage(messageId) {
   const msg = await messenger.messages.get(resolved.id);
   const full = await messenger.messages.getFull(msg.id);
   const attachments = await messenger.messages.listAttachments(msg.id);
+  const draft = isDraftFolder(msg.folder);
 
   // Extract body
   let body = "";
@@ -458,7 +522,8 @@ async function getMessage(messageId) {
     cc: cleanAddressList(msg.ccList),
     subject: msg.subject,
     read: !!msg.read,
-    flags: getFlags(msg),
+    draft,
+    flags: getFlags(msg, draft),
     mailbox: msg.folder?.name || "",
     matches: resolved.matches,
     body,
@@ -962,11 +1027,30 @@ function cleanAddressList(addrs) {
   return addrs.map(cleanAddress);
 }
 
-function getFlags(msg) {
+/**
+ * True when a folder is a drafts or templates mailbox.
+ *
+ * `MessageHeader` has no draft field (Appendix A.2), so `draft` is derived
+ * from the folder's special use, which is part of the same header.
+ */
+function isDraftFolder(folder) {
+  const specialUse = folder && folder.specialUse;
+  return Array.isArray(specialUse) &&
+    (specialUse.includes("drafts") || specialUse.includes("templates"));
+}
+
+/**
+ * Build the legacy `flags` array. `draft` is passed in because it is derived
+ * from the folder rather than carried by MessageHeader. The search path
+ * appends `answered`/`forwarded` after this returns, once the experiment has
+ * reported them.
+ */
+function getFlags(msg, draft = false) {
   const flags = [];
   if (msg.read) flags.push("read");
   if (msg.flagged) flags.push("flagged");
-  if (msg.draft) flags.push("draft");
+  if (msg.junk) flags.push("junk");
+  if (draft) flags.push("draft");
   if (msg.answered) flags.push("answered");
   if (msg.forwarded) flags.push("forwarded");
   return flags;

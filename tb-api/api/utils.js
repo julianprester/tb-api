@@ -296,6 +296,7 @@ const ALIASES = {
     read: ["seen", "opened"],
     flagged: ["starred", "important", "flag"],
     junk: ["spam"],
+    include_preview: ["includePreview"],
   },
   // POST /messages (note: "text" is not a body alias, to avoid the search
   // conflict the global table had)

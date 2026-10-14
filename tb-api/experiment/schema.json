@@ -42,6 +42,20 @@
         ]
       },
       {
+        "name": "getMessageFlags",
+        "type": "function",
+        "async": true,
+        "description": "Read Replied/Forwarded message-header flags for internal message IDs. Returns one entry per known ID; an unreachable message manager returns an empty object.",
+        "parameters": [
+          {
+            "name": "messageIds",
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Internal Thunderbird message IDs as strings"
+          }
+        ]
+      },
+      {
         "name": "sendResponse",
         "type": "function",
         "async": false,

@@ -26,7 +26,7 @@ async function handleRequest(request) {
         ],
         endpoints: {
           email: {
-            "GET /messages": "Search messages. Params: text/q, from, to, subject, mailbox/folder, after/since, before/until, read/seen/opened, unread/unseen, limit, sort (date_desc default, newest first; date_asc), refresh (default false; requires mailbox), timeoutMs (default 30000, max 60000). Responses include matched/complete/has_more and boolean read status",
+            "GET /messages": "Search messages. Params: text/q, from, to, subject, mailbox/folder, after/since, before/until, read/seen/opened, unread/unseen, limit, sort (date_desc default, newest first; date_asc), refresh (default false; requires mailbox), timeoutMs (default 30000, max 60000), include_preview (default true; false omits preview/has_attachment and reads no bodies). Responses include matched/complete/has_more, boolean read status, draft, and attachment/answered/forwarded facts when known",
             "GET /messages/:id": "Get message by Message-ID (with or without angle brackets). Includes boolean read status",
             "POST /messages": "Compose/reply/forward (saves as draft). Params: to, subject, body, identity, in_reply_to (reply), forward_of (forward)",
             "PATCH /messages": "Update flags or move. Params: ids[], flags (read/unread/starred/flagged/junk), mailbox (to move)",

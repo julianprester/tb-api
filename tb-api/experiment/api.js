@@ -557,6 +557,36 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
           return self.folderRefresher.refreshFolder(folderId, timeoutMs);
         },
 
+        /**
+         * Read Replied/Forwarded state for internal message IDs.
+         *
+         * MessageHeader (what the background sees) has no answered/forwarded
+         * fields, but Thunderbird's own nsIMsgDBHdr does: Replied = 0x2,
+         * Forwarded = 0x1000 (Appendix A.5). One entry is returned per ID the
+         * message manager knows. When the manager is unreachable the result
+         * is empty, and callers must omit the flags rather than report a
+         * fabricated false.
+         */
+        async getMessageFlags(messageIds) {
+          const result = {};
+          const manager = context.extension && context.extension.messageManager;
+          if (!manager || typeof manager.get !== "function") return result;
+          for (const id of messageIds || []) {
+            try {
+              const msgHdr = manager.get(id);
+              if (!msgHdr) continue;
+              result[id] = {
+                answered: !!(msgHdr.flags & 0x2),
+                forwarded: !!(msgHdr.flags & 0x1000)
+              };
+            } catch (e) {
+              // A vanished or unknown message must not abort the whole page;
+              // its flags are simply unknown and stay absent.
+            }
+          }
+          return result;
+        },
+
         async stop() {
           self.folderRefresher.cancelAll();
           // Finish requests still waiting: stopping the server must not leave

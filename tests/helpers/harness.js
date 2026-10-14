@@ -246,7 +246,9 @@ function backgroundHarness(options = {}) {
       start: async () => {},
       onRequest: { addListener() {} },
       onSendInvitation: { addListener() {} },
-      refreshFolder: async id => ({ folder_id: id, refreshed: true })
+      refreshFolder: async id => ({ folder_id: id, refreshed: true }),
+      // Message-manager flags are best-effort: the default page has none.
+      getMessageFlags: async () => ({})
     }
   };
 
@@ -729,7 +731,12 @@ function experimentHarness(options = {}) {
   vm.runInContext(source("experiment/api.js"), privileged, { filename: "experiment/api.js" });
   const instance = new privileged.httpServer();
   const api = instance.getAPI({
-    extension: { rootURI: { resolve: name => name } },
+    extension: {
+      rootURI: { resolve: name => name },
+      // Only present when a test provides one: without it, getMessageFlags
+      // exercises the "message manager unavailable" fallback.
+      ...(options.messageManager ? { messageManager: options.messageManager } : {})
+    },
     callOnClose: closer => closers.add(closer)
   }).httpServer;
   if (options.t) {

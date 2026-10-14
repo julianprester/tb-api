@@ -146,6 +146,7 @@ GET /messages
 | read | seen, opened | boolean | Filter by read status (`true` = read, `false` = unread) |
 | unread | unseen | boolean | Filter by unread status (`true` = unread, `false` = read) |
 | refresh | | boolean | Refresh the selected folder before searching (default false; requires mailbox) |
+| include_preview | includePreview | boolean | Include `preview` and `has_attachment` (default true). `false` returns header-only results and reads no message bodies |
 | timeoutMs | timeout_ms, timeout | integer | Refresh deadline in milliseconds (default 30000, range 1–60000) |
 | sort | | string | Result order: `date_desc` (default, newest first) or `date_asc` (oldest first) |
 
@@ -201,13 +202,30 @@ extension to get the explicit field. Do not convert a valid `false` into null
 directly instead. Read status reflects Thunderbird's local state; use a scoped
 `refresh=true` search when current IMAP state is needed.
 
+**Attachments and message flags:** Every returned message includes the boolean
+fields `read` and `draft` (`draft: true` for messages in a Drafts or Templates
+folder; Thunderbird's message header carries no draft flag, so the folder's
+special use is used). The `flags` array reports `read`, `flagged`, `junk`,
+`draft`, `answered`, and `forwarded` as applicable. `answered` and `forwarded`
+are read from Thunderbird's internal message headers. They are only present when
+Thunderbird can report them; an absent `answered`/`forwarded` means unknown and
+must not be treated as `false`.
+
+With the default `include_preview=true`, each returned message also includes
+`has_attachment` (boolean) and `preview` (first 500 characters of the plain-text
+body). Both require opening the message's MIME tree, which on IMAP folders not
+stored offline downloads message content. Set `include_preview=false` for a cheap
+header-only listing: `preview` and `has_attachment` are then omitted entirely and
+no message bodies are read. This is useful for triaging which messages to fetch
+in full afterwards.
+
 #### Get Message
 
 ```http
 GET /messages/:message_id
 ```
 
-Returns full message content including body and attachments. The `message_id` is the Message-ID header value (URL-encoded). Angle brackets are optional: Thunderbird stores Message-IDs without them, and the API compares the text exactly, so `<abc123@example.com>`, `abc123@example.com` and surrounding whitespace are equivalent.
+Returns full message content including body and attachments. The `message_id` is the Message-ID header value (URL-encoded). Angle brackets are optional: Thunderbird stores Message-IDs without them, and the API compares the text exactly, so `<abc123@example.com>`, `abc123@example.com` and surrounding whitespace are equivalent. The response includes the boolean `read` and `draft` fields and a `flags` array (`read`, `flagged`, `junk`, `draft`).
 
 If the same Message-ID appears in several folders (for example an Inbox copy and an archived copy), the first match is returned and the response includes `matches`, the number of copies found. To choose a specific copy, search by `mailbox` first and use the internal `id` from the result (a `mailbox` parameter for GET/PATCH is a planned follow-up).
 
