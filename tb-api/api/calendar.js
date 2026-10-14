@@ -58,6 +58,20 @@ function toCalDateTime(jsDate, cal) {
 }
 
 /**
+ * Exact `recurrenceId` for an occurrence (Task 5.3): all-day occurrences are
+ * `YYYY-MM-DD`; timed occurrences are the UTC instant
+ * (`2026-10-14T07:00:00Z`). The old local, second-truncated string could not
+ * be matched back to a CalRecurrenceInfo rid.
+ */
+function formatRecurrenceId(rid) {
+  if (!rid) return null;
+  if (rid.isDate) return formatCalDateTime(rid);
+  if (!Number.isFinite(rid.nativeTime)) return null;
+  // nativeTime is µs; `Date.parse` reads the value back exactly.
+  return new Date(rid.nativeTime / 1000).toISOString().replace(/\.000Z$/, "Z");
+}
+
+/**
  * Normalize a date-only value to `YYYY-MM-DD`, or return null. Relative
  * inputs ("tomorrow") and datetimes are refused: an all-day event has no time
  * of day to fall back to.
@@ -108,6 +122,178 @@ function parseAllDay(value) {
     ]) };
   }
   return { allDay: parsed };
+}
+
+/**
+ * Resolve a `recurrenceId` against a recurring parent item (Task 5.3).
+ *
+ * `getOccurrenceFor` is deliberately not used: it returns a proxy for ANY
+ * rid, even one that does not exist, so existence is checked instead -- first
+ * against modified occurrences (exceptions may have been moved outside any
+ * date window), then against regular occurrences in a ±1 day window.
+ *
+ * `ridInput` is the API's recurrence id, exactly as `itemToEvent` returns it:
+ * `YYYY-MM-DD` for all-day series, the UTC instant
+ * (`2026-10-14T07:00:00Z`) for timed ones. Returns the matching item or null.
+ */
+function resolveOccurrence(parent, ridInput, cal) {
+  const info = parent.recurrenceInfo;
+  if (!info || typeof ridInput !== "string") return null;
+
+  const dateOnly = parseDateOnly(ridInput);
+  if (!dateOnly && Number.isNaN(Date.parse(ridInput))) return null;
+
+  const matches = rid => dateOnly
+    ? rid.isDate && formatCalDateTime(rid) === dateOnly
+    : !rid.isDate && rid.nativeTime === Date.parse(ridInput) * 1000;
+
+  // 1) Modified occurrences (exceptions) first: a moved occurrence sits
+  //    outside the window around its original recurrence id.
+  const exceptionIds = info.getExceptionIds ? info.getExceptionIds() : [];
+  for (const rid of exceptionIds) {
+    if (!matches(rid)) continue;
+    const exception = info.getExceptionFor(rid);
+    if (exception) return exception;
+  }
+
+  // 2) Regular occurrences in a ±1 day window around the requested rid.
+  const center = dateOnly ? Utils.parseDate(dateOnly) : new Date(ridInput);
+  const from = toCalDateTime(new Date(center.getTime() - 86400000), cal);
+  const to = toCalDateTime(new Date(center.getTime() + 86400000), cal);
+  const occurrences = info.getOccurrences(from, to, 0) || [];
+  return occurrences.find(occurrence => matches(occurrence.recurrenceId)) || null;
+}
+
+/**
+ * Validate the `recurrenceId` / `scope` targeting parameters shared by PATCH
+ * and DELETE (Task 5.3). Returns `{ mode: "occurrence"|"series"|null,
+ * recurrenceId }` or `{ error }`; `mode: null` means neither target was
+ * supplied and the caller decides (non-recurring events proceed, recurring
+ * ones answer 409 ambiguous_recurrence).
+ */
+function parseRecurrenceTarget(recurrenceId, scope) {
+  if (scope !== undefined && scope !== null && scope !== "series") {
+    return { error: Utils.fail("invalid_parameter", `Invalid scope: "${scope}"`, 400, [
+      'scope must be "series" to target the whole recurring series',
+      "Use recurrenceId to target a single occurrence"
+    ]) };
+  }
+  if (recurrenceId !== undefined && recurrenceId !== null) {
+    if (typeof recurrenceId !== "string") {
+      return { error: Utils.fail("invalid_parameter", "recurrenceId must be a string", 400, [
+        "Use the exact recurrenceId value returned by GET /events",
+        'Timed occurrences use a UTC instant like "2026-10-14T07:00:00Z"; all-day ones use "2026-10-14"'
+      ]) };
+    }
+    const rid = recurrenceId.trim();
+    if (!rid) {
+      return { error: Utils.fail("invalid_parameter", "recurrenceId must not be empty", 400, [
+        "Use the exact recurrenceId value returned by GET /events"
+      ]) };
+    }
+    if (scope === "series") {
+      return { error: Utils.fail("invalid_parameter", "recurrenceId and scope=series are mutually exclusive", 400, [
+        "Use recurrenceId to target one occurrence, or scope=series to target the whole series"
+      ]) };
+    }
+    return { mode: "occurrence", recurrenceId: rid };
+  }
+  return { mode: scope === "series" ? "series" : null };
+}
+
+/**
+ * Apply PATCH start/end/allDay to `target` (already a clone of `oldItem`).
+ *
+ * Carry-over from the 5.1 review: an update must not leave a date-only end
+ * beside a timed start (or the other way round). `allDay` -- or the item's
+ * existing type when it is absent -- selects the representation for BOTH
+ * values: each supplied value is parsed in that representation and each
+ * untouched value is converted from its old type. An all-day start supplied
+ * without an end covers exactly one day, as in create. When the update leaves
+ * a known start/end pair, `end <= start` is rejected in the spirit of 5.2.
+ *
+ * Returns a `Utils.fail` result on validation failure, else null.
+ */
+function applyDateFields(target, oldItem, { start, end, allDay }, cal) {
+  const wantsAllDay = allDay !== undefined
+    ? allDay === true
+    : !!(oldItem.startDate && oldItem.startDate.isDate);
+
+  const convert = dt => {
+    if (!dt) return null;
+    if (!!dt.isDate === wantsAllDay) return dt.clone();
+    if (wantsAllDay) {
+      // Timed -> all-day: the calendar date in the default zone.
+      return dateOnlyCalDateTime(formatCalDateTime(dt, cal).slice(0, 10), cal);
+    }
+    // All-day -> timed: reuse the date-only convention (local midnight).
+    const parsed = Utils.parseDate(formatCalDateTime(dt, cal));
+    return parsed ? toCalDateTime(parsed, cal) : null;
+  };
+
+  let newStart = convert(oldItem.startDate);
+  let newEnd = convert(oldItem.endDate);
+
+  if (start !== undefined) {
+    if (wantsAllDay) {
+      const startDateOnly = parseDateOnly(start);
+      if (!startDateOnly) {
+        return Utils.fail("invalid_date", `Could not parse date: "${start}"`, 400, Utils.DATE_SUGGESTIONS);
+      }
+      newStart = dateOnlyCalDateTime(startDateOnly, cal);
+    } else {
+      const startDate = Utils.parseDate(start);
+      if (!startDate) {
+        return Utils.fail("invalid_date", `Could not parse date: "${start}"`, 400, Utils.DATE_SUGGESTIONS);
+      }
+      newStart = toCalDateTime(startDate, cal);
+    }
+  }
+
+  if (end !== undefined) {
+    if (wantsAllDay) {
+      const endDateOnly = parseDateOnly(end);
+      if (!endDateOnly) {
+        return Utils.fail("invalid_date", `Could not parse date: "${end}"`, 400, Utils.DATE_SUGGESTIONS);
+      }
+      newEnd = dateOnlyCalDateTime(endDateOnly, cal);
+    } else {
+      const endDate = Utils.parseDate(end);
+      if (!endDate) {
+        return Utils.fail("invalid_date", `Could not parse date: "${end}"`, 400, Utils.DATE_SUGGESTIONS);
+      }
+      newEnd = toCalDateTime(endDate, cal);
+    }
+  }
+
+  // Moving an all-day start without an end covers exactly one day (the
+  // create convention, kept as-is by the 5.1 update behavior).
+  if (wantsAllDay && start !== undefined && end === undefined && newStart) {
+    const nextDay = shiftDateOnly(formatCalDateTime(newStart, cal), 1);
+    if (!nextDay) {
+      return Utils.fail("invalid_date", `Could not parse date: "${start}"`, 400, Utils.DATE_SUGGESTIONS);
+    }
+    newEnd = dateOnlyCalDateTime(nextDay, cal);
+  }
+
+  // A type conversion of a same-day timed event to all-day would otherwise
+  // collapse to a zero-length day; cover one day instead.
+  if (wantsAllDay && start === undefined && end === undefined &&
+      newStart && newEnd && newEnd.nativeTime <= newStart.nativeTime) {
+    const nextDay = shiftDateOnly(formatCalDateTime(newStart, cal), 1);
+    if (nextDay) newEnd = dateOnlyCalDateTime(nextDay, cal);
+  }
+
+  if (newStart && newEnd && newEnd.nativeTime <= newStart.nativeTime) {
+    return Utils.fail("invalid_date", "End date must be after start date", 400, [
+      `Start: ${formatCalDateTime(newStart, cal)}`,
+      `End: ${formatCalDateTime(newEnd, cal)}`
+    ]);
+  }
+
+  target.startDate = newStart;
+  target.endDate = newEnd;
+  return null;
 }
 
 /**
@@ -295,16 +481,12 @@ function itemToEvent(item, calendarId, cal) {
     // Ignore errors getting attendees
   }
 
-  // For recurring event occurrences, include recurrence metadata
+  // For recurring occurrences, include the exact recurrence id (Task 5.3).
+  // `id` is already the series id (parentId always equalled it, so it is
+  // gone); `occurrence` marks the item as one occurrence of that series.
   let recurrenceId = null;
-  let parentId = null;
   if (item.recurrenceId) {
-    const recMs = item.recurrenceId.nativeTime ? item.recurrenceId.nativeTime / 1000 : null;
-    recurrenceId = recMs ? formatLocalDate(new Date(recMs)) : null;
-    // parentItem is the master event of the series
-    if (item.parentItem && item.parentItem.id !== item.id) {
-      parentId = item.parentItem.id;
-    }
+    recurrenceId = formatRecurrenceId(item.recurrenceId);
   }
 
   const event = {
@@ -324,7 +506,7 @@ function itemToEvent(item, calendarId, cal) {
 
   if (recurrenceId !== null) {
     event.recurrenceId = recurrenceId;
-    event.parentId = parentId || item.id;
+    event.occurrence = true;
   }
 
   return event;
@@ -754,10 +936,13 @@ async function updateEvent(eventId, params, cal, Ci, Cc) {
   const normalized = Utils.normalizeParams(params, Utils.ALIASES.calendar);
   const { calendar: calendarId, title, start, end, location, description, organizer, attendees } = normalized;
 
+  // recurrenceId / scope select one occurrence or the whole series (Task 5.3).
+  const recurrenceTarget = parseRecurrenceTarget(normalized.recurrenceId, normalized.scope);
+  if (recurrenceTarget.error) return recurrenceTarget.error;
+
   // allDay is strict per D5; absent leaves the stored value untouched.
   const allDayParam = parseAllDay(normalized.allDay);
   if (allDayParam.error) return allDayParam.error;
-  const allDay = allDayParam.allDay === true;
 
   if (!calendarId) {
     // Try to help by listing calendars
@@ -792,48 +977,51 @@ async function updateEvent(eventId, params, cal, Ci, Cc) {
       ]);
     }
 
-    const newEvent = event.clone();
+    // Occurrence vs series targeting (Task 5.3). A non-recurring event keeps
+    // its old behavior, even when scope=series is supplied.
+    let oldEvent = event;
+    let updatedScope = null;
+    if (recurrenceTarget.mode === "occurrence") {
+      if (!event.recurrenceInfo) {
+        return Utils.fail("not_recurring", `Event is not recurring: "${eventId}"`, 400, [
+          `Remove recurrenceId to update "${event.title}"`,
+          "GET /events returns recurrenceId only for occurrences of a series"
+        ]);
+      }
+      oldEvent = resolveOccurrence(event, recurrenceTarget.recurrenceId, cal);
+      if (!oldEvent) {
+        return Utils.fail(
+          "occurrence_not_found",
+          `Occurrence not found: "${recurrenceTarget.recurrenceId}"`,
+          404,
+          [
+            `No occurrence of "${event.title}" matches recurrenceId "${recurrenceTarget.recurrenceId}"`,
+            "Use the exact recurrenceId value returned by GET /events"
+          ]
+        );
+      }
+      updatedScope = "occurrence";
+    } else if (event.recurrenceInfo) {
+      if (recurrenceTarget.mode === "series") {
+        updatedScope = "series";
+      } else {
+        return Utils.fail("ambiguous_recurrence", "Event is recurring: specify the target", 409, [
+          "Use recurrenceId=<recurrenceId> to update a single occurrence",
+          "Use scope=series to update the whole series"
+        ]);
+      }
+    }
+
+    const newEvent = oldEvent.clone();
+
+    // Start/end/allDay first: validation happens before anything is stored
+    // and keeps the start/end types consistent (5.3 carry-over from 5.1).
+    // `allDayParam.allDay` is undefined when the parameter was absent, so the
+    // item's stored type is kept then.
+    const dateError = applyDateFields(newEvent, oldEvent, { start, end, allDay: allDayParam.allDay }, cal);
+    if (dateError) return dateError;
 
     if (title !== undefined) newEvent.title = title;
-    if (start !== undefined) {
-      if (allDay) {
-        const startDateOnly = parseDateOnly(start);
-        if (!startDateOnly) {
-          return Utils.fail("invalid_date", `Could not parse date: "${start}"`, 400, Utils.DATE_SUGGESTIONS);
-        }
-        newEvent.startDate = dateOnlyCalDateTime(startDateOnly, cal);
-        // Keep the exclusive-end convention: moving an all-day start without
-        // an end covers exactly one day.
-        if (end === undefined) {
-          const nextDay = shiftDateOnly(startDateOnly, 1);
-          if (!nextDay) {
-            return Utils.fail("invalid_date", `Could not parse date: "${start}"`, 400, Utils.DATE_SUGGESTIONS);
-          }
-          newEvent.endDate = dateOnlyCalDateTime(nextDay, cal);
-        }
-      } else {
-        const startDate = Utils.parseDate(start);
-        if (!startDate) {
-          return Utils.fail("invalid_date", `Could not parse date: "${start}"`, 400, Utils.DATE_SUGGESTIONS);
-        }
-        newEvent.startDate = toCalDateTime(startDate, cal);
-      }
-    }
-    if (end !== undefined) {
-      if (allDay) {
-        const endDateOnly = parseDateOnly(end);
-        if (!endDateOnly) {
-          return Utils.fail("invalid_date", `Could not parse date: "${end}"`, 400, Utils.DATE_SUGGESTIONS);
-        }
-        newEvent.endDate = dateOnlyCalDateTime(endDateOnly, cal);
-      } else {
-        const endDate = Utils.parseDate(end);
-        if (!endDate) {
-          return Utils.fail("invalid_date", `Could not parse date: "${end}"`, 400, Utils.DATE_SUGGESTIONS);
-        }
-        newEvent.endDate = toCalDateTime(endDate, cal);
-      }
-    }
     if (location !== undefined) newEvent.setProperty("LOCATION", location);
     if (description !== undefined) newEvent.setProperty("DESCRIPTION", description);
 
@@ -899,15 +1087,23 @@ async function updateEvent(eventId, params, cal, Ci, Cc) {
       }
     }
 
-    await found.calendar.modifyItem(newEvent, event);
+    await found.calendar.modifyItem(newEvent, oldEvent);
 
-    // Build response
+    // Build response. Occurrence vs series is reported so a client can see
+    // which target the edit landed on (Task 5.3).
     const response = { 
       success: true, 
-      message: "Event updated",
+      message: updatedScope === "occurrence" ? "Occurrence updated" : "Event updated",
       id: eventId,
       title: newEvent.title
     };
+
+    if (updatedScope === "occurrence") {
+      response.recurrenceId = formatRecurrenceId(oldEvent.recurrenceId);
+      response.scope = "occurrence";
+    } else if (updatedScope === "series") {
+      response.scope = "series";
+    }
 
     if (organizer !== undefined) {
       response.organizer = organizer === null ? null : (
@@ -945,6 +1141,10 @@ async function deleteEvent(eventId, params, cal) {
   const normalized = Utils.normalizeParams(params, Utils.ALIASES.calendar);
   const { calendar: calendarId } = normalized;
 
+  // recurrenceId / scope select one occurrence or the whole series (Task 5.3).
+  const recurrenceTarget = parseRecurrenceTarget(normalized.recurrenceId, normalized.scope);
+  if (recurrenceTarget.error) return recurrenceTarget.error;
+
   if (!calendarId) {
     const calendars = cal.manager.getCalendars();
     return Utils.fail(
@@ -978,13 +1178,62 @@ async function deleteEvent(eventId, params, cal) {
     }
 
     const eventTitle = event.title;
+
+    // One occurrence: cancel it by adding an EXDATE to the parent. Calling
+    // deleteItem on an occurrence would only drop an exception, not cancel
+    // the occurrence (Appendix A.4).
+    if (recurrenceTarget.mode === "occurrence") {
+      if (!event.recurrenceInfo) {
+        return Utils.fail("not_recurring", `Event is not recurring: "${eventId}"`, 400, [
+          `Remove recurrenceId to delete "${eventTitle}"`,
+          "GET /events returns recurrenceId only for occurrences of a series"
+        ]);
+      }
+      const occurrence = resolveOccurrence(event, recurrenceTarget.recurrenceId, cal);
+      if (!occurrence) {
+        return Utils.fail(
+          "occurrence_not_found",
+          `Occurrence not found: "${recurrenceTarget.recurrenceId}"`,
+          404,
+          [
+            `No occurrence of "${eventTitle}" matches recurrenceId "${recurrenceTarget.recurrenceId}"`,
+            "Use the exact recurrenceId value returned by GET /events"
+          ]
+        );
+      }
+      const newParent = event.clone();
+      newParent.recurrenceInfo.removeOccurrenceAt(occurrence.recurrenceId);
+      await found.calendar.modifyItem(newParent, event);
+      return {
+        success: true,
+        message: "Occurrence deleted",
+        title: eventTitle,
+        recurrenceId: formatRecurrenceId(occurrence.recurrenceId),
+        scope: "occurrence"
+      };
+    }
+
+    // A recurring series needs an explicit target: deleting it by accident is
+    // what D7 guards against.
+    if (recurrenceTarget.mode === null && event.recurrenceInfo) {
+      return Utils.fail("ambiguous_recurrence", "Event is recurring: specify the target", 409, [
+        "Use recurrenceId=<recurrenceId> to delete a single occurrence",
+        "Use scope=series to delete the whole series"
+      ]);
+    }
+
     await found.calendar.deleteItem(event);
 
-    return { 
+    const response = { 
       success: true, 
       message: "Event deleted",
       title: eventTitle
     };
+    // A non-recurring event with scope=series keeps the old response shape.
+    if (recurrenceTarget.mode === "series" && event.recurrenceInfo) {
+      response.scope = "series";
+    }
+    return response;
   } catch (e) {
     return Utils.fail("delete_failed", `Failed to delete event: ${e.message}`, 500);
   }

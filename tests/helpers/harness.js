@@ -386,25 +386,48 @@ function ridKey(rid) {
     : `time:${rid.nativeTime}`;
 }
 
-function createOccurrence(parentItem, rid) {
+function createOccurrence(parentItem, rid, overrides = {}) {
   const duration = parentItem?.startDate && parentItem?.endDate
     ? parentItem.endDate.nativeTime - parentItem.startDate.nativeTime
     : 0;
+  const startNative = overrides.startNative ?? rid.nativeTime;
+  const endNative = overrides.endNative ?? startNative + duration;
+  // An occurrence inherits the parent's zone; an exception may override it.
+  const timezone = overrides.timezone ?? parentItem?.startDate?.timezone ?? rid.timezone;
+  // Exceptions start from the parent and may override properties/attendees.
+  const properties = { ...(overrides.properties || {}) };
+  let attendees = overrides.attendees ? [...overrides.attendees] : null;
   return {
     id: parentItem?.id,
-    title: parentItem?.title || "",
+    title: overrides.title ?? parentItem?.title ?? "",
     recurrenceId: rid,
     parentItem,
-    startDate: fakeDateTime(rid.nativeTime, { isDate: rid.isDate, timezone: rid.timezone }),
-    endDate: fakeDateTime(rid.nativeTime + duration, { isDate: rid.isDate, timezone: rid.timezone }),
+    startDate: fakeDateTime(startNative, { isDate: rid.isDate, timezone }),
+    endDate: fakeDateTime(endNative, { isDate: rid.isDate, timezone }),
     getProperty(name) {
-      return parentItem?.getProperty?.(name) ?? null;
+      return properties[name] ?? parentItem?.getProperty?.(name) ?? null;
+    },
+    setProperty(name, value) {
+      properties[name] = value;
     },
     getAttendees() {
-      return parentItem?.getAttendees?.() || [];
+      return attendees || parentItem?.getAttendees?.() || [];
+    },
+    addAttendee(attendee) {
+      if (!attendees) attendees = [...(parentItem?.getAttendees?.() || [])];
+      attendees.push(attendee);
+    },
+    removeAllAttendees() {
+      attendees = [];
     },
     clone() {
-      return createOccurrence(parentItem, rid.clone());
+      return createOccurrence(parentItem, rid.clone(), {
+        startNative: this.startDate.nativeTime,
+        endNative: this.endDate.nativeTime,
+        title: this.title,
+        properties: { ...properties },
+        attendees: attendees ? [...attendees] : null
+      });
     }
   };
 }
@@ -421,10 +444,25 @@ class FakeRecurrenceInfo {
     this.exceptions = new Map();
     for (const exception of spec.exceptions || []) {
       const rid = toRid(exception.recurrenceId ?? exception.rid, spec.allDay);
-      this.exceptions.set(ridKey(rid), {
-        rid,
-        item: exception.item || createOccurrence(parentItem, rid)
-      });
+      let item = exception.item || null;
+      if (!item) {
+        // An exception may be moved: `start`/`end` describe where it went,
+        // while `recurrenceId` stays the original series slot.
+        const isDate = exception.allDay ?? spec.allDay ?? rid.isDate;
+        const overrides = {};
+        if (exception.start !== undefined) {
+          overrides.startNative = toNativeTime(exception.start, isDate);
+          overrides.endNative = exception.end !== undefined
+            ? toNativeTime(exception.end, isDate)
+            : overrides.startNative + (parentItem?.startDate && parentItem?.endDate
+              ? parentItem.endDate.nativeTime - parentItem.startDate.nativeTime
+              : 0);
+        }
+        if (exception.title !== undefined) overrides.title = exception.title;
+        if (exception.location !== undefined) overrides.properties = { LOCATION: exception.location };
+        item = createOccurrence(parentItem, rid, overrides);
+      }
+      this.exceptions.set(ridKey(rid), { rid, item });
     }
     this.removedOccurrences = [];
   }
@@ -435,29 +473,43 @@ class FakeRecurrenceInfo {
   }
 
   getExceptionFor(ridInput) {
-    return this.exceptions.get(ridKey(toRid(ridInput)))?.item || null;
+    return this.exceptions.get(ridKey(toRid(ridInput, this.parentItem?.startDate?.isDate)))?.item || null;
   }
 
   getExceptionIds() {
     return [...this.exceptions.values()].map(exception => exception.rid);
   }
 
+  addException(rid, item) {
+    this.exceptions.set(ridKey(rid), { rid: rid.clone ? rid.clone() : rid, item });
+  }
+
   removeOccurrenceAt(ridInput) {
     this.removedOccurrences.push(ridInput);
   }
 
+  isRemoved(rid) {
+    const key = ridKey(rid);
+    return this.removedOccurrences.some(removed => ridKey(removed) === key);
+  }
+
   getOccurrences(from, to, count) {
     return this.occurrences
+      // Cancelled occurrences are excluded, like an EXDATE in iCalendar.
+      .filter(rid => !this.isRemoved(rid))
       .filter(rid => rid.nativeTime >= from.nativeTime && rid.nativeTime <= to.nativeTime)
       .slice(0, count > 0 ? count : undefined)
-      .map(rid => createOccurrence(this.parentItem, rid));
+      // A modified occurrence is returned in place of its original slot.
+      .map(rid => this.getExceptionFor(rid) || createOccurrence(this.parentItem, rid));
   }
 
   clone() {
     const copy = new FakeRecurrenceInfo();
     copy.parentItem = this.parentItem;
     copy.occurrences = this.occurrences.map(rid => rid.clone());
-    copy.exceptions = new Map(this.exceptions);
+    copy.exceptions = new Map([...this.exceptions].map(([key, exception]) => [key, {
+      rid: exception.rid.clone(), item: exception.item
+    }]));
     copy.removedOccurrences = [...this.removedOccurrences];
     return copy;
   }
@@ -578,8 +630,21 @@ function createFakeCal(options = {}) {
       },
       async modifyItem(newItem, oldItem) {
         const at = this.items.indexOf(oldItem);
-        if (at >= 0) this.items[at] = newItem;
-        else this.items.push(newItem);
+        if (at >= 0) {
+          this.items[at] = newItem;
+          return newItem;
+        }
+        // A modified occurrence rewrites its parent series with the exception
+        // (Appendix A.4).
+        const parent = oldItem?.parentItem;
+        const parentAt = parent ? this.items.indexOf(parent) : -1;
+        if (parentAt >= 0) {
+          const newParent = parent.clone();
+          newParent.recurrenceInfo.addException(newItem.recurrenceId, newItem);
+          this.items[parentAt] = newParent;
+          return newItem;
+        }
+        this.items.push(newItem);
         return newItem;
       },
       async deleteItem(item) {
