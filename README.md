@@ -143,22 +143,35 @@ GET /messages
 
 | Parameter | Aliases | Type | Description |
 |-----------|---------|------|-------------|
-| text | q, query, search | string | Full-text search in message content |
+| text | q, query, search, keyword, keywords | string | Full-text search in message content |
 | from | sender, author | string | Filter by sender |
-| to | recipient | string | Filter by recipient |
-| subject | | string | Filter by subject |
+| to | recipient, recipients | string | Filter by recipient |
+| subject | subj | string | Filter by subject |
 | mailbox | folder, mailboxId, folderId, box | string | Filter by folder ID, name, or role (inbox, sent, drafts...) |
-| after | since | string | Messages after date |
-| before | until | string | Messages before date |
-| limit | | number | Max results (default 50, max 100) |
+| after | since, from_date, fromDate, start, startDate | string | Messages after date |
+| before | until, to_date, toDate, end, endDate | string | Messages before date |
+| limit | max, count, size, maxResults | number | Max results (default 50, max 100) |
 | read | seen, opened | boolean | Filter by read status (`true` = read, `false` = unread) |
 | unread | unseen | boolean | Filter by unread status (`true` = unread, `false` = read) |
+| flagged | starred, important, flag | boolean | Filter by flagged/starred status |
+| junk | spam | boolean | Filter by junk status |
 | refresh | | boolean | Refresh the selected folder before searching (default false; requires mailbox) |
 | include_preview | includePreview | boolean | Include `preview` and `has_attachment` (default true). `false` returns header-only results and reads no message bodies |
 | timeoutMs | timeout_ms, timeout | integer | Refresh deadline in milliseconds (default 30000, range 1–60000) |
 | sort | | string | Result order: `date_desc` (default, newest first) or `date_asc` (oldest first) |
 
-**Date formats**: ISO 8601 (`2024-01-15`), or natural language (`today`, `yesterday`, `2 days ago`, `last week`)
+**Strict booleans**: `refresh`, `include_preview`, `read`/`unread`, `flagged`
+and `junk` accept only `true`/`false`/`1`/`0` (case-sensitive strings or
+booleans). Any other supplied value is a `400 invalid_filter`/`400
+invalid_refresh` instead of being silently ignored, and `read`/`unread` must
+not contradict each other (`400 invalid_filter`).
+
+**Date formats**: ISO 8601 (`2024-01-15T10:30:00`), date-only (`2024-01-15`,
+local midnight), natural language (`today`, `yesterday`, `2 days ago`, `next
+monday`), numeric dates carrying a four-digit year (`15/01/2024`,
+`01-15-2024`) and JavaScript date strings with a four-digit year (`Jan 15
+2024`). See [Date and Time Formats](#date-and-time-formats); forms without a
+four-digit year such as `Jan 15` are rejected.
 
 Example:
 ```bash
@@ -190,6 +203,13 @@ the newest matches found so far with `complete: false`, `has_more: true` and a
 CPU. If not even the first page arrives in time, the request fails with `504`
 and `code: "search_timeout"` instead of an empty list. Narrow a slow search with
 `after=`/`before=` or `mailbox=`.
+
+When a `mailbox` filter was supplied, the response also includes
+`resolved_mailbox: { "id", "name", "matched_by" }`: the exact folder that was
+searched and how it was matched (`id`, `role`, `name`, or `fuzzy`). Reporting a
+fuzzy choice makes a typo visible instead of silently searching a different
+folder. With `refresh=true` the response additionally carries the `refresh`
+object described under [Refresh Folder](#refresh-folder).
 
 **Full-text search:** `q`/`text` scans message bodies (Thunderbird matches the
 subject and author first, then parses each message's MIME tree), so it can be
@@ -235,7 +255,7 @@ GET /messages/:message_id
 
 Returns full message content including body and attachments. The `message_id` is the Message-ID header value (URL-encoded). Angle brackets are optional: Thunderbird stores Message-IDs without them, and the API compares the text exactly, so `<abc123@example.com>`, `abc123@example.com` and surrounding whitespace are equivalent. The response includes the boolean `read` and `draft` fields and a `flags` array (`read`, `flagged`, `junk`, `draft`).
 
-If the same Message-ID appears in several folders (for example an Inbox copy and an archived copy), the first match is returned and the response includes `matches`, the number of copies found. To choose a specific copy, search by `mailbox` first and use the internal `id` from the result (a `mailbox` parameter for GET/PATCH is a planned follow-up).
+If the same Message-ID appears in several folders (for example an Inbox copy and an archived copy), the first match is returned and the response includes `matches`, the number of copies found. `matches` counts the copies in the first query page (Thunderbird returns one page per query); an internal numeric ID is looked up directly and reports `matches: 1`. To choose a specific copy, search by `mailbox` first and use the internal `id` from the result (a `mailbox` parameter for GET/PATCH is a planned follow-up). `PATCH` changes only the first match of a Message-ID.
 
 Example:
 ```bash
@@ -367,6 +387,29 @@ curl "http://localhost:9595/events?start=today&end=next+week"
 curl "http://localhost:9595/events?calendar=Work&start=2024-01-01"
 ```
 
+Every parameter also accepts its `snake_case` spelling (`start_date`,
+`calendar_id`, `end_time`, ...); `start`/`end` accept the full
+[date grammar](#date-and-time-formats).
+
+#### Upcoming Events
+
+```http
+GET /upcoming
+```
+
+Returns events between now and the end of today (local time), earliest first.
+`calendar` (`calendarId`, `cal`) optionally restricts the result to one
+calendar; names are fuzzy matched, as in `GET /events`.
+
+```bash
+curl "http://localhost:9595/upcoming"
+curl "http://localhost:9595/upcoming?calendar=Work"
+```
+
+The response contains `events` (the same [event fields](#event-fields) as
+`GET /events`), the window bounds `from`/`until` as local
+`YYYY-MM-DDTHH:MM:SS`, and `hints` when nothing is left today.
+
 #### Create Event
 
 ```http
@@ -401,13 +444,24 @@ Content-Type: application/json
 | description | desc, details, notes | No | Event description |
 | organizer | host, owner | No | Organizer email or {email, name}; must be one of your identities |
 | attendees | participants, invitees, guests | No | Array of emails or {email, name, role, status} |
+| allDay | all_day | No | Strict boolean: `true` stores a date-only (all-day) event. `start`/`end` must then be `YYYY-MM-DD` and `end` is the **exclusive** end date (default: start + 1 day) |
 | sendInvites | send_invites, notify | No | Strict boolean alias for `inviteMode: "draft"` |
 | inviteMode | invite_mode | No | `draft` (default) saves the invitation as a draft; `send` sends immediately (requires `TB_API_ALLOW_SEND=1`) |
 
 *Calendar auto-selected if only one writable calendar exists
 
+An all-day event defaults to exactly one day, so an explicit `end` is optional
+when `allDay: true` (a date-only `end` is exclusive). Strict booleans
+(`sendInvites`, `allDay`) reject any value other than `true`/`false`/`1`/`0`
+with `400 invalid_filter`.
+
 Creating an event returns `201 Created` with `invitations: { "status": "draft_saved"
 | "sent" | "queued" | "failed", "error"? }` when invitations were requested.
+`draft_saved` is the default; `sent`/`queued` need `inviteMode: "send"` plus
+`TB_API_ALLOW_SEND=1`; `failed` carries an `error` and still leaves the created
+event in place (a failed invitation is a warning, never a rolled-back event).
+The response also reports the stored `id`, `calendar` (name), `title`, `start`,
+`end`, `allDay`, and `organizer`/`attendees` when supplied.
 
 **Invitations are drafts by default.** `sendInvites: true` (or
 `inviteMode: "draft"`) creates a mail in the Drafts folder with `invite.ics`
@@ -446,13 +500,57 @@ The `calendar` parameter is required to identify which calendar contains the eve
 
 Note: Updating `attendees` replaces all existing attendees.
 
+`allDay` switches the stored representation (`true` = date-only, `false` =
+timed); `start`/`end` move the event. When an all-day `start` is changed
+without an `end`, the event covers exactly one day. See
+[Recurring Events](#recurring-events) for `recurrenceId`/`scope`.
+
+The response reports `id`, `title`, and for a recurring event the `scope`
+(`"occurrence"` or `"series"`) plus the `recurrenceId` when one occurrence was
+updated. `PATCH` never sends invitation updates.
+
 #### Delete Event
 
 ```http
 DELETE /events/:id?calendar=calendar-id
 ```
 
-The `calendar` parameter is required.
+The `calendar` parameter is required. See
+[Recurring Events](#recurring-events) for deleting one occurrence
+(`recurrenceId`) or the whole series (`scope: "series"`). A recurring event
+without either parameter is refused with `409 ambiguous_recurrence`. `DELETE`
+never sends cancellation mails.
+
+#### Recurring Events
+
+`GET /events` and `GET /upcoming` return one entry per occurrence. An
+occurrence carries `occurrence: true` and the `recurrenceId` to pass back to
+`PATCH`/`DELETE`; the series itself is identified by the event `id`.
+
+```bash
+# Delete just this occurrence (timed series: UTC instant)
+curl -X DELETE "http://localhost:9595/events/EVENT_ID?calendar=Work" \
+  -H "Content-Type: application/json" \
+  -d '{"recurrenceId": "2026-10-14T07:00:00Z"}'
+
+# Update the whole series
+curl -X PATCH "http://localhost:9595/events/EVENT_ID?calendar=Work" \
+  -H "Content-Type: application/json" \
+  -d '{"scope": "series", "title": "New title"}'
+```
+
+- `recurrenceId` targets exactly one occurrence. Timed occurrences use the UTC
+  instant from `GET /events` (`2026-10-14T07:00:00Z`); all-day occurrences use
+  the date (`2026-10-14`).
+- `scope: "series"` targets the whole recurring series.
+- The two are mutually exclusive (`400 invalid_parameter`), and any `scope`
+  other than `"series"` is also `400 invalid_parameter`.
+- Editing or deleting a recurring event without either parameter is refused
+  with `409 ambiguous_recurrence`, so a series cannot be changed by accident.
+- An unknown `recurrenceId` is `404 occurrence_not_found`; using `recurrenceId`
+  on a non-recurring event is `400 not_recurring`.
+- Non-recurring events keep working unchanged, even when `scope=series` is
+  supplied.
 
 ---
 
@@ -474,9 +572,12 @@ GET /contacts
 
 | Parameter | Aliases | Type | Description |
 |-----------|---------|------|-------------|
-| q | query, search | string | Search in name and email |
-| addressbook | book | string | Filter by address book ID or name |
-| limit | | number | Max results (default 50) |
+| query | q, search, text | string | Search in name and email (case-insensitive) |
+| addressbook | addressBook, book, bookId, addressBookId | string | Filter by address book ID or name |
+| limit | max, count, size, maxResults | number | Max results (default 50, max 100) |
+
+Contact parameters are normalized per domain: here `q`/`query`/`search` all mean
+the contact search field (unlike `GET /messages`, where `q` means `text`).
 
 Example:
 ```bash
@@ -506,7 +607,7 @@ Content-Type: application/json
 | email | Yes | Email address |
 | firstName | No | First name |
 | lastName | No | Last name |
-| displayName | No | Display name (auto-generated if omitted) |
+| displayName | No | Display name (auto-generated if omitted); accepts `name`, `fullName` |
 | addressbook | Auto* | Address book ID or name |
 
 *Address book auto-selected if only one writable book exists
@@ -533,6 +634,52 @@ DELETE /contacts/:id
 
 ---
 
+## Date and Time Formats
+
+Every `after`/`before` (email), `start`/`end` (events) and `recurrenceId`
+value is parsed by the same grammar. The `suggestions` array of an
+`invalid_date` error lists only examples that parse.
+
+| Form | Meaning |
+|------|---------|
+| `2024-01-15` | Calendar date at **local midnight** (not UTC) |
+| `2024-01-15T10:30:00` | Local time; seconds and milliseconds optional |
+| `2024-01-15T10:30:00Z`, `2024-01-15T10:30:00+02:00` | That exact instant (offset kept) |
+| `now` | The current instant |
+| `today`, `yesterday`, `tomorrow` | Local midnight of that day |
+| `last week`, `next week`, `a week ago`, `last month`, `next month`, `a month ago` | Local midnight ± 7 days / ± 1 month |
+| `3 days ago`, `in 2 weeks`, `4 months ago` | Local midnight ± N days/weeks/months |
+| `monday`, `next monday`, `last friday`, `this wednesday` | Local midnight of that weekday |
+| `15/01/2024`, `01-15-2024`, `31-12-2024` | Numeric date with a four-digit year |
+| `Jan 15 2024`, `January 15 2024` | Anything else containing a four-digit year that JavaScript's date parser understands |
+
+Details:
+
+- Date-only values use **local midnight**; a bare date is never interpreted as
+  UTC.
+- Date-times without an offset are local time; `Z` and `±HH:MM` keep that exact
+  instant.
+- Weekdays are Monday-based. `next <weekday>` and a bare `<weekday>` mean the
+  next occurrence **strictly after today** (so `next monday` on a Monday is +7
+  days); `last <weekday>` is the most recent occurrence strictly before today;
+  `this <weekday>` is that weekday in the current ISO week (it may be today, in
+  the past, or still ahead).
+- Numeric dates with a four-digit year: **slash is day-first**
+  (`15/01/2024` = 15 January 2024), **dash is month-first** (`01-15-2024` = 15
+  January 2024). If one field is out of range it is swapped
+  (`31-12-2024` = 2024-12-31, `01/15/2024` = 2024-01-15).
+- A four-digit-year fallback (`new Date`) is used only when the string contains
+  a four-digit year: `Jan 15 2024` parses, while `Jan 15` is rejected instead
+  of silently becoming the year 2001.
+- `+` is treated as a space (clients sometimes double-encode `next+week`),
+  except when it introduces a timezone offset in an ISO datetime.
+- Impossible dates (`2024-02-31`), overflow arithmetic and unknown words are
+  rejected with `400 invalid_date` and the supported examples.
+- All-day event `start`/`end` values must be date-only (`YYYY-MM-DD`); they are
+  not run through the relative/natural-language forms.
+
+---
+
 ## Response Format
 
 ### Success (list)
@@ -540,10 +687,49 @@ DELETE /contacts/:id
 ```json
 {
   "messages": [...],
-  "total": 42,
-  "has_more": false
+  "total": 10,
+  "matched": 42,
+  "complete": true,
+  "has_more": true,
+  "resolved_mailbox": {"id": "account1:/Inbox", "name": "Inbox", "matched_by": "role"}
 }
 ```
+
+List responses report `total` (number returned), `matched` (exact number of
+matches; omitted while `complete` is `false`), `complete` (the whole result set
+was scanned), `has_more` (more matches exist than were returned), and — when a
+folder was selected — `resolved_mailbox` with `matched_by`. Search responses
+that hit the scan budget add `warnings`. `PATCH /messages` responses use
+`results`/`updated`/`moved` instead.
+
+### Event fields
+
+`GET /events` and `GET /upcoming` return events like:
+
+```json
+{
+  "id": "event-uuid",
+  "calendar": "Work",
+  "title": "Team Meeting",
+  "start": "2024-01-15T10:00:00",
+  "end": "2024-01-15T11:00:00",
+  "allDay": false,
+  "timezone": "Europe/Berlin",
+  "location": null,
+  "description": null,
+  "organizer": null,
+  "attendees": null
+}
+```
+
+- `calendar` is the calendar's display name; use `GET /calendars` for IDs.
+- `start`/`end` are local times (`YYYY-MM-DDTHH:MM:SS`) in the calendar's
+  default timezone, or date-only (`YYYY-MM-DD`) when `allDay` is `true`. For
+  all-day events `end` is the **exclusive** end date, as in iCalendar.
+- `timezone` is the calendar's default timezone (`tzid`).
+- `location`, `description`, `organizer` and `attendees` are `null` when unset.
+- An occurrence of a recurring series additionally has `occurrence: true` and
+  `recurrenceId` (see [Recurring Events](#recurring-events)).
 
 ### Success (mutation)
 
@@ -571,23 +757,80 @@ DELETE /contacts/:id
 
 `code` is stable and machine-readable: match on it. `error` is human-readable
 and may be reworded between releases. `suggestions` is present when the API can
-recommend a fix.
+recommend a fix. A malformed query string (bad percent-encoding) is a `400`
+without a `code`.
+
+#### Shared codes
 
 | Code | HTTP status | Meaning |
 |------|-------------|---------|
 | `invalid_body` | 400 | Request body is not a JSON object |
-| `invalid_query` | 400 | Query string could not be parsed |
 | `invalid_parameter` | 400 | Missing or invalid parameter |
-| `invalid_filter` | 400 | Invalid message filter value |
-| `invalid_date` | 400 | Date could not be parsed |
+| `invalid_filter` | 400 | Invalid strict boolean or contradictory filter value |
+| `invalid_date` | 400 | Date could not be parsed, or end is not after start |
+| `invalid_target` | 400 | Target (mailbox/calendar/address book/identity) is not a non-empty ID, name, or role |
 | `not_found` | 404 | Requested resource does not exist |
 | `folder_not_found` | 404 | Mail folder does not exist |
-| `ambiguous_target` | 409 | Several targets match; specify one |
-| `ambiguous_recurrence` | 409 | Recurring event needs `recurrenceId` or `scope=series` |
+| `ambiguous_target` | 409 | Several targets match; `matches` in the body lists them |
 | `read_only` | 403 | Calendar or address book is read-only |
+| `request_timeout` | 504 | No handler answered the request within the watchdog (120 s) |
+
+#### Email codes
+
+| Code | HTTP status | Meaning |
+|------|-------------|---------|
+| `missing_mailbox` | 400 | `mailbox` is required (refresh, or `refresh=true`) |
+| `invalid_mailbox` | 400 | Mailbox is not a non-empty folder ID, name, or role |
+| `invalid_folder` | 400 | A folder ID is required |
+| `invalid_timeout` | 400 | `timeoutMs` is not an integer between 1 and 60000 |
+| `invalid_refresh` | 400 | `refresh` is not `true`, `false`, `1`, or `0` |
+| `search_timeout` | 504 | The search produced no page within the 20-second budget |
+| `compose_failed` | 500 | `POST /messages` could not save the draft |
+| `update_failed` | 502 | `PATCH /messages` could not change any message |
+| `refresh_failed` | 500/502 | Folder refresh failed (500 when the call throws, 502 when Thunderbird reports a failed update) |
+| `refresh_timeout` | 504 | The caller deadline passed; the native update continues and later callers share it |
+| `refresh_stalled` | 504 | No completion signal within five minutes; the operation is abandoned |
+| `refresh_cancelled` | 503 | The API/extension stopped while waiting |
+| `refresh_unavailable` | 503 | Folder refresh is unavailable on this Thunderbird version |
+| `unsupported_folder` | 400 | Root, virtual/unified, tag, or non-selectable folder |
+| `unsupported_protocol` | 400 | Per-folder refresh is not supported for this account type |
+| `thunderbird_offline` | 503 | Thunderbird is offline |
+
+#### Calendar codes
+
+| Code | HTTP status | Meaning |
+|------|-------------|---------|
+| `calendar_unavailable` | 503 | Thunderbird's calendar component is not available |
+| `list_failed` | 500 | Listing calendars failed |
+| `create_failed` | 500 | Creating the event failed |
+| `update_failed` | 500 | Updating the event failed |
+| `delete_failed` | 500 | Deleting the event failed |
+| `not_recurring` | 400 | `recurrenceId` was used on a non-recurring event |
+| `occurrence_not_found` | 404 | No occurrence matches the given `recurrenceId` |
+| `ambiguous_recurrence` | 409 | Recurring event needs `recurrenceId` or `scope=series` |
 | `sending_disabled` | 403 | Sending invitations is disabled (`TB_API_ALLOW_SEND`) |
-| `update_failed` | 500/502 | Updating an existing resource failed; `PATCH /messages` uses 502 when no message could be changed |
-| `request_timeout` | 504 | The request was not answered in time |
+| `read_only` | 403 | Calendar is read-only |
+
+#### Contact codes
+
+| Code | HTTP status | Meaning |
+|------|-------------|---------|
+| `create_failed` | 500 | Creating the contact failed |
+| `update_failed` | 500 | Updating the contact failed |
+| `delete_failed` | 500 | Deleting the contact failed |
+| `read_only` | 403 | Address book is read-only |
+
+#### Transport codes
+
+Emitted by the HTTP layer before routing, so the request body may contain only
+`error` and `code`.
+
+| Code | HTTP status | Meaning |
+|------|-------------|---------|
+| `origin_not_allowed` | 403 | `Origin` is not in `TB_API_ALLOWED_ORIGINS` |
+| `cross_site_request` | 403 | Cross-site browser request without an allowlisted origin |
+| `unsupported_media_type` | 415 | Body sent without `Content-Type: application/json` |
+| `api_not_ready` | 503 | The background handler is not registered (yet) or the server is shutting down |
 
 ### HTTP Status Codes
 
@@ -595,20 +838,19 @@ recommend a fix.
 |------|-------------|
 | 200 | Success |
 | 201 | Created (`POST /events`) |
+| 204 | No Content (CORS preflight for an allowlisted origin) |
 | 207 | Partial success (some messages were updated/moved, some failed) |
 | 400 | Bad request (missing/invalid parameters) |
+| 401 | Unauthorized (`TB_API_TOKEN` set but missing/wrong) |
 | 403 | Forbidden (read-only target, sending disabled, rejected origin) |
 | 404 | Resource not found |
 | 405 | Method not allowed |
-| 409 | Ambiguous target (specify the calendar or occurrence) |
+| 409 | Ambiguous target (specify the calendar, folder, or occurrence) |
+| 415 | Unsupported Media Type (body without `Content-Type: application/json`) |
 | 500 | Internal server error |
-| 502 | Thunderbird's folder update failed |
-| 503 | Thunderbird offline or refresh unavailable/stopped |
-| 504 | Request or folder refresh exceeded the deadline |
-
-Folder-refresh errors additionally use machine-readable codes such as
-`refresh_timeout`, `refresh_stalled`, `thunderbird_offline`, or
-`unsupported_folder`.
+| 502 | Thunderbird's folder update failed, or `PATCH /messages` changed nothing |
+| 503 | Thunderbird offline, calendar unavailable, or refresh unavailable/stopped |
+| 504 | Request, search, or folder refresh exceeded the deadline |
 
 ---
 
@@ -625,7 +867,41 @@ All requests must then include:
 Authorization: Bearer your-secret-token
 ```
 
-See [SECURITY.md](SECURITY.md) for more details.
+A missing or wrong token is `401 Unauthorized` with a `WWW-Authenticate:
+Bearer` header. The server refuses to start when it is bound to a non-loopback
+address (for example `TB_API_HOST=0.0.0.0` inside Docker) without a token.
+
+### Origins and browser access
+
+The API never emits a wildcard CORS header. A browser request is served only
+when its `Origin` header exactly matches an entry in `TB_API_ALLOWED_ORIGINS`
+(comma-separated, empty by default), and only the matching origin is echoed
+back:
+
+```bash
+export TB_API_ALLOWED_ORIGINS="https://app.example.com"
+```
+
+Any other `Origin`, and requests that look cross-site (`Sec-Fetch-Site:
+cross-site` or `same-site`) without an allowlisted origin, are rejected with
+`403` (`code: "origin_not_allowed"` or `"cross_site_request"`) before
+authentication runs. Non-browser clients such as curl send neither header and
+are unaffected. Browser requests with a body must use `Content-Type:
+application/json`; anything else is `415 unsupported_media_type`, which blocks
+cross-site form posts that bypass a CORS preflight.
+
+### Deployment
+
+The default bind address is `127.0.0.1:9595` (localhost only). The Docker
+Compose file sets `TB_API_HOST=0.0.0.0` inside the container but publishes all
+three ports on `127.0.0.1` only, and it refuses to start without
+`TB_API_TOKEN`. Do not expose port 9595 on a public interface; use a reverse
+proxy with TLS and a token instead. Host-header validation (`TB_API_HOSTS`) is
+not an authentication boundary.
+
+See [SECURITY.md](SECURITY.md) for the full model, including the
+[Origin policy](SECURITY.md#origin-policy), Host-header validation and the
+fail-closed rules.
 
 ### Sending invitations
 
@@ -645,14 +921,17 @@ with `403 sending_disabled` and no event is created.
 
 ## Testing
 
-Run the mocked refresh tests without Thunderbird or network access:
+Run the mocked test suite without Thunderbird or network access:
 
 ```bash
-node --test tests/test-refresh-folder.js
+node --test tests/test-*.js
 ```
 
 These cover native listener completion, errors/timeouts, concurrent callers,
-folder targeting, search ordering, HTTP routing, and authentication. CI runs them.
+folder targeting, search ordering and boundedness, HTTP routing and
+authentication, dates, per-domain aliases, message IDs, boolean filters, and a
+documentation consistency check (every route described in `GET /` and
+`README.md`). CI runs them.
 
 The shell integration scripts require a running, configured Thunderbird API:
 
