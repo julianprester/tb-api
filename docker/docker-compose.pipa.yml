@@ -1,0 +1,16 @@
+# Optional override for deployments that must join the shared pipa-network.
+# The external network must already exist. Use it with:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.pipa.yml up -d
+#
+# deploy.sh adds this file automatically when the pipa-network exists. The
+# base docker-compose.yml works on its own for everyone else.
+
+services:
+  thunderbird:
+    networks:
+      - pipa-network
+
+networks:
+  pipa-network:
+    external: true

@@ -130,19 +130,19 @@ docker compose up -d
 > deletes the `thunderbird_config` volume, which contains the Thunderbird profile and
 > all locally stored mail. Only use it when you intend to start over.
 
-### Shared Docker Network (ocpa-network)
+### Shared Docker Network (pipa-network)
 
-The base `docker-compose.yml` has no external network dependencies. If you run ocpa
-and want this container attached to its existing external `ocpa-network`, use the
+The base `docker-compose.yml` has no external network dependencies. If you run pipa
+and want this container attached to its existing external `pipa-network`, use the
 optional override file:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.ocpa.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.pipa.yml up -d
 ```
 
-`deploy.sh` adds the override automatically when `docker-compose.ocpa.yml` exists.
-On that network the API is reachable from other containers at
-`http://thunderbird:9595`.
+`deploy.sh` adds the override automatically when `docker-compose.pipa.yml` is
+present and the `pipa-network` network exists. On that network the API is
+reachable from other containers at `http://thunderbird:9595`.
 
 ### VNC
 

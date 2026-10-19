@@ -9,10 +9,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 VOLUME="docker_thunderbird_config"
 ENV_FILE="$SCRIPT_DIR/.env"
 
-# Use the ocpa network override when present; the base file works standalone.
+# Join the shared pipa-network via the override when it exists on this host;
+# the base file works standalone elsewhere.
 COMPOSE_ARGS=(-f "$SCRIPT_DIR/docker-compose.yml")
-if [ -f "$SCRIPT_DIR/docker-compose.ocpa.yml" ]; then
-  COMPOSE_ARGS+=(-f "$SCRIPT_DIR/docker-compose.ocpa.yml")
+if [ -f "$SCRIPT_DIR/docker-compose.pipa.yml" ] && docker network inspect pipa-network >/dev/null 2>&1; then
+  COMPOSE_ARGS+=(-f "$SCRIPT_DIR/docker-compose.pipa.yml")
 fi
 
 # Source TB_API_TOKEN from docker/.env for the readiness probe and final request.
