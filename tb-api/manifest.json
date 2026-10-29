@@ -23,6 +23,7 @@
   "background": {
     "scripts": [
       "api/utils.js",
+      "api/attachments.js",
       "api/email.js",
       "api/contacts.js",
       "background.js"

@@ -307,7 +307,7 @@ function backgroundHarness(options = {}) {
     sandbox.Date = createClockDate(options.clock);
   }
   const context = vm.createContext(sandbox);
-  for (const file of ["api/utils.js", "api/email.js", "api/contacts.js", "background.js"]) {
+  for (const file of ["api/utils.js", "api/attachments.js", "api/email.js", "api/contacts.js", "background.js"]) {
     vm.runInContext(source(file), context, { filename: file });
   }
 
@@ -320,6 +320,7 @@ function backgroundHarness(options = {}) {
     browser, context, events, messenger, messages, queries, updates, continuedLists, abortedLists, folders,
     composeCalls,
     Email: context.Email, Utils: context.Utils, Contacts: context.Contacts,
+    Attachments: context.Attachments, File: FakeFile,
     request,
     count: event => events.filter(([name]) => name === event).length
   };
