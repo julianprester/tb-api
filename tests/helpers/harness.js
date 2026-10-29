@@ -259,6 +259,20 @@ function backgroundHarness(options = {}) {
         composeCalls.push({ method: "beginNew", details });
         return { id: `compose-tab-${++nextComposeTab}` };
       },
+      async beginReply(messageId, type, details) {
+        composeCalls.push({ method: "beginReply", messageId, type, details });
+        return { id: `compose-tab-${++nextComposeTab}` };
+      },
+      async beginForward(messageId, type, details) {
+        composeCalls.push({ method: "beginForward", messageId, type, details });
+        return { id: `compose-tab-${++nextComposeTab}` };
+      },
+      async getComposeDetails() {
+        return { isPlainText: true, plainTextBody: "" };
+      },
+      async setComposeDetails(tabId, details) {
+        composeCalls.push({ method: "setComposeDetails", tabId, details });
+      },
       async addAttachment(tabId, attachment) {
         composeCalls.push({ method: "addAttachment", tabId, attachment });
       },

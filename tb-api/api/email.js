@@ -733,13 +733,53 @@ async function prependBodyToCompose(tabId, userText) {
 }
 
 /**
+ * Read the first present field from an attachment object. `Object.hasOwn`
+ * keeps an explicit empty string distinct from a missing field.
+ */
+function attachmentField(item, names) {
+  for (const name of names) {
+    if (Object.hasOwn(item, name)) return item[name];
+  }
+  return undefined;
+}
+
+/**
+ * Parse the `attachments` request field into File objects for compose.
+ * Task 4 covers the happy path; Task 5 adds the strict validation, limits and
+ * error mapping.
+ */
+function parseAttachments(value) {
+  if (value === undefined || value === null) return { attachments: [] };
+  if (!Array.isArray(value)) {
+    return { error: Utils.fail("invalid_attachment", "attachments must be an array", 400, [
+      'Provide attachments as [{"name": "file.txt", "data_base64": "..."}]'
+    ]) };
+  }
+
+  const attachments = value.map(item => {
+    const name = attachmentField(item, ["name", "filename", "fileName"]);
+    const contentType = attachmentField(item, ["content_type", "contentType", "mime_type", "mimeType"])
+      || "application/octet-stream";
+    const data = attachmentField(item, ["data_base64", "dataBase64", "data", "content", "base64"]);
+    const bytes = Attachments.decodeBase64(data);
+    return {
+      file: new File([bytes], name, { type: contentType }),
+      name,
+      contentType,
+      size: bytes.length
+    };
+  });
+  return { attachments };
+}
+
+/**
  * Compose message (draft or send) with auto-recovery
  * Supports new messages, replies (in_reply_to), and forwards (forward_of)
  */
 async function composeMessage(params) {
   // Normalize parameters
   const normalized = Utils.normalizeParams(params, Utils.ALIASES.compose);
-  let { to, cc, bcc, subject, body, identity, in_reply_to, forward_of } = normalized;
+  let { to, cc, bcc, subject, body, identity, in_reply_to, forward_of, attachments } = normalized;
 
   // Validate: for new messages, 'to' is required; for replies/forwards it's optional
   if (!in_reply_to && !forward_of && !to) {
@@ -750,6 +790,11 @@ async function composeMessage(params) {
       'For forwards, use "forward_of" with the message_id'
     ]);
   }
+
+  // Parse attachments before opening a compose window. A validation failure
+  // must not leave a stray tab behind.
+  const parsed = parseAttachments(attachments);
+  if (parsed.error) return parsed.error;
 
   // Find identity - auto-select if not specified
   const identities = await messenger.identities.list();
@@ -850,6 +895,15 @@ async function composeMessage(params) {
       tab = await messenger.compose.beginNew(composeDetails);
     }
 
+    // Attach files before saving the draft. Any failure here aborts the whole
+    // request and closes the tab in the catch below.
+    for (const attachment of parsed.attachments) {
+      await messenger.compose.addAttachment(tab.id, {
+        file: attachment.file,
+        name: attachment.name
+      });
+    }
+
     // Always save as draft (sending disabled for safety)
     await messenger.compose.saveMessage(tab.id, { mode: "draft" });
     await messenger.tabs.remove(tab.id);
@@ -857,6 +911,9 @@ async function composeMessage(params) {
       success: true, 
       message: mode === "reply" ? "Reply draft saved" : mode === "forward" ? "Forward draft saved" : "Draft saved",
       from: selectedIdentity,
+      ...(parsed.attachments.length > 0
+        ? { attachments: parsed.attachments.map(({ name, contentType, size }) => ({ name, content_type: contentType, size })) }
+        : {}),
       note: "Message saved as draft. Open Thunderbird to review and send."
     };
   } catch (e) {

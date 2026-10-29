@@ -305,6 +305,7 @@ const ALIASES = {
     subject: ["title", "subj"],
     in_reply_to: ["inReplyTo", "reply_to", "replyTo"],
     forward_of: ["forwardOf", "forward"],
+    attachments: ["attachment", "files"],
   },
   // GET/POST /contacts, PATCH /contacts/:id. `query` is canonical here: `q`
   // previously became `text`, which searchContacts never read.

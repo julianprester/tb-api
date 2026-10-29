@@ -283,3 +283,69 @@ test("the experiment server writes raw download bytes", async () => {
   assert.deepEqual(Array.from(res.rawBytes), [1, 2, 3]);
   assert.equal(res.headers["Content-Type"], "application/octet-stream");
 });
+
+const B64 = value => Buffer.from(value).toString("base64");
+
+function uploadHarness(overrides = {}) {
+  return backgroundHarness({
+    identities: [{ id: "id1", email: "me@example.test" }],
+    ...overrides
+  });
+}
+
+test("new message attachments are added before the draft is saved", async () => {
+  const h = uploadHarness();
+  const res = await h.request("POST", "/messages", "", JSON.stringify({
+    to: "to@example.test",
+    subject: "Report",
+    body: "See attached",
+    attachments: [{
+      name: "report.pdf",
+      content_type: "application/pdf",
+      data_base64: B64("hello")
+    }]
+  }));
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.attachments, [
+    { name: "report.pdf", content_type: "application/pdf", size: 5 }
+  ]);
+
+  const methods = h.composeCalls.map(call => call.method);
+  assert.deepEqual(methods, ["beginNew", "addAttachment", "saveMessage", "removeTab"]);
+  const added = h.composeCalls.find(call => call.method === "addAttachment").attachment;
+  assert.equal(added.name, "report.pdf");
+  assert.equal(added.file.type, "application/pdf");
+  assert.deepEqual(Array.from(added.file.parts[0]), [104, 101, 108, 108, 111]);
+});
+
+test("reply and forward drafts accept attachments", async () => {
+  for (const mode of ["reply", "forward"]) {
+    const h = uploadHarness();
+    h.messenger.messages.query = async () => ({ messages: [{ id: 1 }] });
+    h.messenger.messages.get = async () => messageFixture();
+    const payload = mode === "reply"
+      ? { in_reply_to: "msg-1@example.test", body: "reply", attachments: [{ name: "r.txt", data_base64: B64("r") }] }
+      : { forward_of: "msg-1@example.test", to: "to@example.test", body: "fwd", attachments: [{ name: "f.txt", data_base64: B64("f") }] };
+    const res = await h.request("POST", "/messages", "", JSON.stringify(payload));
+    assert.equal(res.status, 200);
+    assert.equal(h.composeCalls[0].method, mode === "reply" ? "beginReply" : "beginForward");
+    assert.ok(h.composeCalls.some(call => call.method === "addAttachment"));
+  }
+});
+
+test("zero-byte and Unicode attachments are preserved", async () => {
+  const h = uploadHarness();
+  const res = await h.request("POST", "/messages", "", JSON.stringify({
+    to: "to@example.test",
+    body: "files",
+    attachments: [
+      { name: "empty.txt", data_base64: "" },
+      { name: "résumé.pdf", data_base64: B64("x") }
+    ]
+  }));
+  assert.equal(res.status, 200);
+  const added = h.composeCalls.filter(call => call.method === "addAttachment").map(call => call.attachment);
+  assert.equal(added[0].file.parts[0].length, 0);
+  assert.equal(added[1].name, "résumé.pdf");
+});
