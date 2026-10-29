@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `GET /messages/:id/attachments/:partName` downloads one attachment as raw
+  bytes, with an opt-in `?format=json` base64 envelope. `GET /messages/:id`
+  now reports each attachment's `partName`, `content_id`, `download_url`, and
+  `inline` when Thunderbird exposes `contentDisposition`.
+- `POST /messages` accepts `attachments: [{name, content_type?, data_base64}]`
+  for new, reply, and forward drafts. Attachments are limited to 10 MiB each,
+  25 MiB total, and 20 files; any attachment failure saves no draft.
+
 ## [3.0.2] - 2026-10-15
 
 ### Fixed

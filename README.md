@@ -262,6 +262,8 @@ GET /messages/:message_id
 
 Returns full message content including body and attachments. The `message_id` is the Message-ID header value (URL-encoded). Angle brackets are optional: Thunderbird stores Message-IDs without them, and the API compares the text exactly, so `<abc123@example.com>`, `abc123@example.com` and surrounding whitespace are equivalent. The response includes the boolean `read` and `draft` fields and a `flags` array (`read`, `flagged`, `junk`, `draft`, plus `answered`/`forwarded` when Thunderbird can report them; an absent `answered`/`forwarded` means unknown, not `false`).
 
+Each entry in `attachments` includes `name`, `size`, `contentType`, `partName`, and `download_url`. `content_id` is present when the attachment has one, and `inline` is present only when Thunderbird reports `contentDisposition` (so it is omitted on Thunderbird 128). Use `partName` with the download endpoint below.
+
 If the same Message-ID appears in several folders (for example an Inbox copy and an archived copy), the first match is returned and the response includes `matches`, the number of copies found. `matches` counts the copies in the first query page (Thunderbird returns one page per query); an internal numeric ID is looked up directly and reports `matches: 1`. To choose a specific copy, search by `mailbox` first and use the internal `id` from the result (a `mailbox` parameter for GET/PATCH is a planned follow-up). `PATCH` changes only the first match of a Message-ID.
 
 A digits-only reference (for example `123456`) is always resolved as an
@@ -282,12 +284,22 @@ GET /messages/:message_id/attachments/:part_name
 ```
 
 Returns one attachment's bytes. `part_name` is the `partName` value in the
-message's `attachments` array. The default response uses the attachment's
-`Content-Type`, a `Content-Disposition` filename, `Content-Length`, and
-`X-Content-Type-Options: nosniff`. Add `?format=json` to receive
+message's `attachments` array. The default response is raw bytes with these
+headers:
+
+- `Content-Type`: the attachment's MIME type, or `application/octet-stream`.
+- `Content-Length`: the exact byte length.
+- `Content-Disposition`: an ASCII fallback filename and an RFC 5987
+  `filename*=UTF-8''...` value for non-ASCII names.
+- `X-Content-Type-Options: nosniff` and `Cache-Control: no-store`.
+
+Add `?format=json` to receive
 `{message_id, partName, name, content_type, size, data_base64}` instead.
+Downloads have no API-level size cap; Thunderbird reads the whole attachment
+before the response is written.
+
 Unknown part names are `404 attachment_not_found`; malformed ones are `400
-invalid_part_name`.
+invalid_part_name`; a native read failure is `500 attachment_failed`.
 
 ```bash
 curl -OJ "http://localhost:9595/messages/12345/attachments/1.2"
@@ -332,6 +344,32 @@ Creates a new message, reply, or forward. **Always saves as draft** (sending dis
 }
 ```
 
+**Attachments:**
+```json
+{
+  "to": "recipient@example.com",
+  "subject": "Report",
+  "body": "See attached",
+  "attachments": [
+    {
+      "name": "report.pdf",
+      "content_type": "application/pdf",
+      "data_base64": "JVBERi0xLjQK..."
+    }
+  ]
+}
+```
+
+The `attachments` field works for new messages, replies, and forwards. Each
+entry needs `name` and `data_base64`; `content_type` defaults to
+`application/octet-stream`. `data_base64` uses the standard base64 alphabet
+(whitespace is ignored, `=` padding is optional, URL-safe `-`/`_` is
+rejected). An explicit empty string is a zero-byte file. Limits are 10 MiB per
+file, 25 MiB total, and 20 files. If any file cannot be added, the whole
+request fails with `500 attachment_failed` and **no draft is saved**. On
+success the response includes `attachments: [{name, content_type, size}]` for
+the files that were added.
+
 | Parameter | Aliases | Description |
 |-----------|---------|-------------|
 | to | | Recipient(s) - required for new/forward |
@@ -342,6 +380,7 @@ Creates a new message, reply, or forward. **Always saves as draft** (sending dis
 | identity | | Sender identity (email or ID) |
 | in_reply_to | inReplyTo, reply_to | Message-ID to reply to |
 | forward_of | forwardOf, forward | Message-ID to forward |
+| attachments | attachment, files | Array of `{name, content_type?, data_base64}` files |
 
 #### Update Messages
 
@@ -835,6 +874,12 @@ without a `code`.
 | `invalid_timeout` | 400 | `timeoutMs` is not an integer between 1 and 60000 |
 | `invalid_refresh` | 400 | `refresh` is not `true`, `false`, `1`, or `0` |
 | `search_timeout` | 504 | The search produced no page within the 20-second budget |
+| `invalid_part_name` | 400 | Attachment `partName` is not a Thunderbird MIME part name |
+| `attachment_not_found` | 404 | The message has no attachment with that `partName` |
+| `attachment_failed` | 500 | Thunderbird could not read or add an attachment |
+| `invalid_attachment` | 400 | Missing or unsafe name, missing data, or invalid base64 |
+| `attachment_too_large` | 413 | A file or the total exceeds the attachment limits |
+| `too_many_attachments` | 400 | More than 20 files in one request |
 | `compose_failed` | 500 | `POST /messages` could not save the draft |
 | `update_failed` | 502 | `PATCH /messages` fully updated no message; `updated`/`moved`/`results` show what partly applied |
 | `refresh_failed` | 500/502 | Folder refresh failed (500 when the call throws, 502 when Thunderbird reports a failed update) |
@@ -896,6 +941,7 @@ Emitted by the HTTP layer before routing, so the request body may contain only
 | 404 | Resource not found |
 | 405 | Method not allowed |
 | 409 | Ambiguous target (specify the calendar, folder, or occurrence) |
+| 413 | Payload too large (an attachment exceeds the per-file or total limit) |
 | 415 | Unsupported Media Type (body without `Content-Type: application/json`) |
 | 500 | Internal server error |
 | 502 | Thunderbird's folder update failed, or `PATCH /messages` fully updated no message (see `updated`/`results`) |

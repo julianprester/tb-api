@@ -29,9 +29,17 @@ curl -s "http://localhost:9595/messages?from=sender@example.com&after=7+days+ago
 # Get full message by Message-ID
 curl -s "http://localhost:9595/messages/<message_id@example.com>"
 
+# Download an attachment (partName comes from GET /messages/:id)
+curl -OJ "http://localhost:9595/messages/<message_id@example.com>/attachments/1.2"
+curl -s "http://localhost:9595/messages/<message_id@example.com>/attachments/1.2?format=json"
+
 # Create draft
 curl -s -X POST http://localhost:9595/messages -H "Content-Type: application/json" \
   -d '{"to":"recipient@example.com", "subject":"Subject", "body":"Message body"}'
+
+# Create a draft with an attachment (standard base64 in data_base64)
+curl -s -X POST http://localhost:9595/messages -H "Content-Type: application/json" \
+  -d '{"to":"recipient@example.com", "subject":"Report", "body":"See attached", "attachments":[{"name":"report.pdf", "content_type":"application/pdf", "data_base64":"JVBERi0x..."}]}'
 
 # Reply to message (saves as draft)
 curl -s -X POST http://localhost:9595/messages -H "Content-Type: application/json" \
@@ -61,6 +69,7 @@ curl -s "http://localhost:9595/upcoming"
 - **Newest first** - `GET /messages` returns newest-first by default (`sort=date_desc`); `sort=date_asc` flips the order. `matched` is exact only when `complete` is true; when the 20-second scan budget expires the response has `complete: false`, `has_more: true` and a `warnings` entry. When a `mailbox` was given, `resolved_mailbox.matched_by` says whether it matched by `id`, `role`, `name`, or `fuzzy`.
 - **Read status** - List and single-message responses include boolean `read` (`false` means unread, not unknown). The `flags` array also contains `"read"` for read messages. Avoid `jq '.read // null'` or Python `message.get("read") or None`, which turn valid `false` into null. Older builds omitted the field; reload the updated extension. Getting message content does not mark it read.
 - **Attachments and message flags** - Search results include boolean `draft` (true in Drafts/Templates folders) and, with the default `include_preview=true`, `has_attachment` and a `preview`. `answered`/`forwarded` are reported when Thunderbird can read them, and `has_attachment` is omitted when the MIME tree cannot be read; an absent value means unknown, not `false`. The `flags` array covers `read`, `flagged`, `junk`, `draft`, `answered`, `forwarded`.
+- **Attachment download and draft upload** - `GET /messages/:id` entries carry `partName` and `download_url`; `GET /messages/:id/attachments/:partName` returns the raw file (or `?format=json` for `{data_base64, ...}`). `POST /messages` accepts `attachments: [{name, content_type?, data_base64}]` for new, reply, and forward drafts. Base64 is standard (optional `=` padding, no URL-safe `-`/`_`), and an empty string is a zero-byte file. Limits are 10 MiB per file, 25 MiB total, and 20 files. If any attachment fails, the request is `500 attachment_failed` and no draft is saved.
 - **Cheap header-only listings** - `GET /messages?include_preview=false` omits `preview`/`has_attachment` and reads no message bodies. Use it to triage a large folder, then fetch full content only for the messages you keep.
 - **Message-IDs work with or without angle brackets** - `<abc123@example.com>`, `abc123@example.com` and surrounding spaces are equivalent (URL-encode `<`, `>`, `@` in GET paths). Prefer Message-IDs over internal numeric IDs; both are accepted for GET and PATCH. When a Message-ID appears in several folders, GET returns the first match plus a `matches` count, and PATCH changes only the first match.
 - **Batch updates are honest** - `PATCH /messages` applies flags first, then the move, and reports one `results` entry per message (`{ "ref", "id", "updated", "moved", "error"? }`). All messages succeeded → `200`; some failed → `207` with `success: false` and `partial: true`; no message was fully updated → `502 update_failed` (`updated`/`results` still show what partly applied). Unresolved `ids` are listed in `not_found`. Flag aliases include the inverse `unread`/`unseen` (`add_flags: ["unread"]` clears `read`); an unknown flag is a `400` that changes nothing.
@@ -77,7 +86,8 @@ curl -s "http://localhost:9595/upcoming"
 |--------|----------|-------------|
 | GET | /messages | Search messages |
 | GET | /messages/:id | Get full message |
-| POST | /messages | Compose/reply/forward (draft) |
+| GET | /messages/:id/attachments/:partName | Download attachment (raw or `?format=json`) |
+| POST | /messages | Compose/reply/forward (draft, optional attachments) |
 | PATCH | /messages | Update flags or move |
 | GET | /mailboxes | List mail folders |
 | POST | /mailboxes/refresh | Refresh a concrete folder (mailbox required) |
