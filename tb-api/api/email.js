@@ -745,8 +745,8 @@ function attachmentField(item, names) {
 
 /**
  * Parse the `attachments` request field into File objects for compose.
- * Task 4 covers the happy path; Task 5 adds the strict validation, limits and
- * error mapping.
+ * Everything is validated before a compose window opens, and the decoded
+ * sizes are checked against the per-file and total limits.
  */
 function parseAttachments(value) {
   if (value === undefined || value === null) return { attachments: [] };
@@ -755,20 +755,92 @@ function parseAttachments(value) {
       'Provide attachments as [{"name": "file.txt", "data_base64": "..."}]'
     ]) };
   }
+  if (value.length > Attachments.MAX_ATTACHMENTS) {
+    return { error: Utils.fail(
+      "too_many_attachments",
+      `At most ${Attachments.MAX_ATTACHMENTS} attachments are allowed`,
+      400,
+      ["Send fewer files in one draft"]
+    ) };
+  }
 
-  const attachments = value.map(item => {
+  const attachments = [];
+  const sizes = [];
+  const maxEncodedLength = Math.ceil(Attachments.MAX_ATTACHMENT_BYTES * 4 / 3) + 4;
+
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return { error: Utils.fail("invalid_attachment", "Each attachment must be an object", 400, [
+        'Provide each attachment as {"name": "file.txt", "data_base64": "..."}'
+      ]) };
+    }
+
     const name = attachmentField(item, ["name", "filename", "fileName"]);
-    const contentType = attachmentField(item, ["content_type", "contentType", "mime_type", "mimeType"])
-      || "application/octet-stream";
+    const nameError = Attachments.validateName(name);
+    if (nameError) {
+      return { error: Utils.fail("invalid_attachment", nameError, 400, [
+        'Use a plain filename such as "report.pdf"'
+      ]) };
+    }
+
+    const contentTypeValue = attachmentField(item, ["content_type", "contentType", "mime_type", "mimeType"]);
+    if (contentTypeValue !== undefined) {
+      const contentTypeError = Attachments.validateContentType(contentTypeValue);
+      if (contentTypeError) {
+        return { error: Utils.fail("invalid_attachment", contentTypeError, 400, [
+          "Use a single MIME type such as application/pdf"
+        ]) };
+      }
+    }
+    const contentType = Attachments.safeContentType(contentTypeValue);
+
     const data = attachmentField(item, ["data_base64", "dataBase64", "data", "content", "base64"]);
-    const bytes = Attachments.decodeBase64(data);
-    return {
+    if (typeof data !== "string") {
+      return { error: Utils.fail(
+        "invalid_attachment",
+        "Attachment data_base64 must be a base64 string",
+        400,
+        ['Include "data_base64" with standard base64 content; an empty string is a zero-byte file']
+      ) };
+    }
+
+    // Reject an obviously oversized payload before allocating the decoded
+    // copy. The exact size is checked again after decoding.
+    if (data.replace(/\s+/g, "").length > maxEncodedLength) {
+      return { error: Utils.fail(
+        "attachment_too_large",
+        `Attachment exceeds the ${Math.round(Attachments.MAX_ATTACHMENT_BYTES / (1024 * 1024))} MiB limit`,
+        413,
+        ["Reduce the file size or split it across messages"]
+      ) };
+    }
+
+    let bytes;
+    try {
+      bytes = Attachments.decodeBase64(data);
+    } catch (e) {
+      return { error: Utils.fail("invalid_attachment", "Attachment data is not valid base64", 400, [
+        "Use the standard base64 alphabet; whitespace is ignored and padding is optional",
+        "The URL-safe - and _ characters are not accepted"
+      ]) };
+    }
+
+    sizes.push(bytes.length);
+    attachments.push({
       file: new File([bytes], name, { type: contentType }),
       name,
       contentType,
       size: bytes.length
-    };
-  });
+    });
+  }
+
+  const limit = Attachments.limitError(sizes);
+  if (limit) {
+    return { error: Utils.fail(limit.code, limit.message, limit.statusCode, [
+      "The limits are 10 MiB per file and 25 MiB total"
+    ]) };
+  }
+
   return { attachments };
 }
 
@@ -831,6 +903,7 @@ async function composeMessage(params) {
 
   let tab;
   let mode = "new";
+  let attachmentFailure = null;
 
   try {
     if (in_reply_to) {
@@ -898,10 +971,15 @@ async function composeMessage(params) {
     // Attach files before saving the draft. Any failure here aborts the whole
     // request and closes the tab in the catch below.
     for (const attachment of parsed.attachments) {
-      await messenger.compose.addAttachment(tab.id, {
-        file: attachment.file,
-        name: attachment.name
-      });
+      try {
+        await messenger.compose.addAttachment(tab.id, {
+          file: attachment.file,
+          name: attachment.name
+        });
+      } catch (e) {
+        attachmentFailure = e;
+        throw e;
+      }
     }
 
     // Always save as draft (sending disabled for safety)
@@ -919,6 +997,12 @@ async function composeMessage(params) {
   } catch (e) {
     if (tab) {
       try { await messenger.tabs.remove(tab.id); } catch {}
+    }
+    if (attachmentFailure) {
+      return Utils.fail("attachment_failed", `Failed to attach file: ${attachmentFailure.message}`, 500, [
+        "Check that the attachment content and name are valid",
+        "No draft was saved"
+      ]);
     }
     return Utils.fail("compose_failed", `Failed to save draft: ${e.message}`, 500, [
       "Check that the recipient email address is valid",

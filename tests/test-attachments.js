@@ -349,3 +349,79 @@ test("zero-byte and Unicode attachments are preserved", async () => {
   assert.equal(added[0].file.parts[0].length, 0);
   assert.equal(added[1].name, "résumé.pdf");
 });
+
+test("invalid attachment input is rejected before a compose window opens", async () => {
+  const cases = [
+    { payload: { to: "to@example.test", attachments: "nope" }, code: "invalid_attachment" },
+    { payload: { to: "to@example.test", attachments: [{ name: "x.txt" }] }, code: "invalid_attachment" },
+    { payload: { to: "to@example.test", attachments: [{ name: "../x", data_base64: "" }] }, code: "invalid_attachment" },
+    { payload: { to: "to@example.test", attachments: [{ name: "x.txt", data_base64: "AAEC_w==" }] }, code: "invalid_attachment" },
+    { payload: { to: "to@example.test", attachments: [{ name: "x.txt", content_type: "text/plain\r\nX: y", data_base64: "" }] }, code: "invalid_attachment" }
+  ];
+
+  for (const { payload, code } of cases) {
+    const h = uploadHarness();
+    const res = await h.request("POST", "/messages", "", JSON.stringify(payload));
+    assert.equal(res.status, 400);
+    assert.equal(res.body.code, code);
+    assert.equal(h.composeCalls.length, 0);
+  }
+});
+
+test("too many attachments is rejected", async () => {
+  const h = uploadHarness();
+  const attachments = Array.from({ length: 21 }, (_, index) => ({
+    name: `file-${index}.txt`,
+    data_base64: ""
+  }));
+  const res = await h.request("POST", "/messages", "", JSON.stringify({
+    to: "to@example.test",
+    attachments
+  }));
+  assert.equal(res.status, 400);
+  assert.equal(res.body.code, "too_many_attachments");
+  assert.equal(h.composeCalls.length, 0);
+});
+
+test("per-file and total attachment limits are enforced", async () => {
+  const h = uploadHarness();
+  h.Attachments.MAX_ATTACHMENT_BYTES = 3;
+  const perFile = await h.request("POST", "/messages", "", JSON.stringify({
+    to: "to@example.test",
+    attachments: [{ name: "big.bin", data_base64: B64("abcd") }]
+  }));
+  assert.equal(perFile.status, 413);
+  assert.equal(perFile.body.code, "attachment_too_large");
+
+  const h2 = uploadHarness();
+  h2.Attachments.MAX_TOTAL_ATTACHMENT_BYTES = 5;
+  const total = await h2.request("POST", "/messages", "", JSON.stringify({
+    to: "to@example.test",
+    attachments: [
+      { name: "a.bin", data_base64: B64("abcd") },
+      { name: "b.bin", data_base64: B64("abcd") }
+    ]
+  }));
+  assert.equal(total.status, 413);
+  assert.equal(total.body.code, "attachment_too_large");
+});
+
+test("a failed addAttachment closes the tab and saves no draft", async () => {
+  const h = uploadHarness({
+    messenger: {
+      compose: {
+        async addAttachment() {
+          throw new Error("synthetic attachment failure");
+        }
+      }
+    }
+  });
+  const res = await h.request("POST", "/messages", "", JSON.stringify({
+    to: "to@example.test",
+    attachments: [{ name: "x.txt", data_base64: B64("x") }]
+  }));
+  assert.equal(res.status, 500);
+  assert.equal(res.body.code, "attachment_failed");
+  assert.equal(h.composeCalls.some(call => call.method === "saveMessage"), false);
+  assert.equal(h.composeCalls.some(call => call.method === "removeTab"), true);
+});
