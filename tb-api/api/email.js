@@ -766,7 +766,9 @@ function parseAttachments(value) {
 
   const attachments = [];
   const sizes = [];
+  let totalBytes = 0;
   const maxEncodedLength = Math.ceil(Attachments.MAX_ATTACHMENT_BYTES * 4 / 3) + 4;
+  const totalLimit = Math.round(Attachments.MAX_TOTAL_ATTACHMENT_BYTES / (1024 * 1024));
 
   for (const item of value) {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
@@ -806,12 +808,26 @@ function parseAttachments(value) {
 
     // Reject an obviously oversized payload before allocating the decoded
     // copy. The exact size is checked again after decoding.
-    if (data.replace(/\s+/g, "").length > maxEncodedLength) {
+    const strippedLength = data.replace(/\s+/g, "").length;
+    if (strippedLength > maxEncodedLength) {
       return { error: Utils.fail(
         "attachment_too_large",
         `Attachment exceeds the ${Math.round(Attachments.MAX_ATTACHMENT_BYTES / (1024 * 1024))} MiB limit`,
         413,
         ["Reduce the file size or split it across messages"]
+      ) };
+    }
+
+    // Stop before decoding a file that would push the running total over the
+    // limit. The decoded-size check below is the exact guard.
+    const paddingLength = (data.match(/=+$/) || [""])[0].length;
+    const approximateBytes = Math.floor(Math.max(0, strippedLength - paddingLength) * 3 / 4);
+    if (totalBytes + approximateBytes > Attachments.MAX_TOTAL_ATTACHMENT_BYTES) {
+      return { error: Utils.fail(
+        "attachment_too_large",
+        `Attachments exceed the ${totalLimit} MiB total limit`,
+        413,
+        ["Reduce the total size or split the files across messages"]
       ) };
     }
 
@@ -823,6 +839,16 @@ function parseAttachments(value) {
         "Use the standard base64 alphabet; whitespace is ignored and padding is optional",
         "The URL-safe - and _ characters are not accepted"
       ]) };
+    }
+
+    totalBytes += bytes.length;
+    if (totalBytes > Attachments.MAX_TOTAL_ATTACHMENT_BYTES) {
+      return { error: Utils.fail(
+        "attachment_too_large",
+        `Attachments exceed the ${totalLimit} MiB total limit`,
+        413,
+        ["Reduce the total size or split the files across messages"]
+      ) };
     }
 
     sizes.push(bytes.length);

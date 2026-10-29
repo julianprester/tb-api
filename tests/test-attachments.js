@@ -425,3 +425,27 @@ test("a failed addAttachment closes the tab and saves no draft", async () => {
   assert.equal(h.composeCalls.some(call => call.method === "saveMessage"), false);
   assert.equal(h.composeCalls.some(call => call.method === "removeTab"), true);
 });
+
+test("total limit stops decoding once the running total is exceeded", async () => {
+  const h = uploadHarness();
+  h.Attachments.MAX_TOTAL_ATTACHMENT_BYTES = 5;
+  let decoded = 0;
+  const original = h.Attachments.decodeBase64;
+  h.Attachments.decodeBase64 = text => {
+    decoded++;
+    return original(text);
+  };
+
+  const res = await h.request("POST", "/messages", "", JSON.stringify({
+    to: "to@example.test",
+    attachments: [
+      { name: "a.bin", data_base64: B64("abcd") },
+      { name: "b.bin", data_base64: B64("abcd") },
+      { name: "c.bin", data_base64: B64("abcd") }
+    ]
+  }));
+
+  assert.equal(res.status, 413);
+  assert.equal(res.body.code, "attachment_too_large");
+  assert.equal(decoded, 1, "the second file must be rejected before it is decoded");
+});
