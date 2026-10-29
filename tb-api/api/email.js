@@ -574,6 +574,80 @@ async function getMessage(messageId) {
 }
 
 /**
+ * Download one attachment by MIME part name, as raw bytes or base64 JSON.
+ *
+ * `format` is absent for raw bytes or "json" for the envelope. The message
+ * reference goes through the same resolver as GET /messages/:id, and the part
+ * name is validated before any native call.
+ */
+async function downloadAttachment(messageRef, partName, { format } = {}) {
+  if (format !== undefined && format !== "json") {
+    return Utils.fail("invalid_parameter", 'format must be "json" when supplied', 400, [
+      "Omit format for raw bytes, or use format=json"
+    ]);
+  }
+  if (!Attachments.isValidPartName(partName)) {
+    return Utils.fail("invalid_part_name", `Invalid attachment part name: "${partName}"`, 400, [
+      "Use the partName value from GET /messages/:id"
+    ]);
+  }
+
+  const resolved = await resolveMessageRef(messageRef);
+  if (resolved.error) return resolved;
+
+  let message;
+  let attachments;
+  try {
+    message = await messenger.messages.get(resolved.id);
+    attachments = await messenger.messages.listAttachments(resolved.id);
+  } catch (e) {
+    return Utils.fail("attachment_failed", `Could not read attachments: ${e.message}`, 500, [
+      "Verify the message still exists and its attachments are available offline"
+    ]);
+  }
+
+  const attachment = (attachments || []).find(candidate =>
+    candidate && candidate.partName === partName
+  );
+  if (!attachment) {
+    return Utils.fail("attachment_not_found", `Attachment not found: "${partName}"`, 404, [
+      "Use GET /messages/:id to list attachment part names"
+    ]);
+  }
+
+  let bytes;
+  try {
+    const file = await messenger.messages.getAttachmentFile(resolved.id, partName);
+    bytes = new Uint8Array(await file.arrayBuffer());
+  } catch (e) {
+    return Utils.fail("attachment_failed", `Failed to read attachment: ${e.message}`, 500, [
+      "The attachment may not be downloaded for offline use",
+      "Try again after Thunderbird finishes synchronizing the message"
+    ]);
+  }
+
+  const contentType = Attachments.safeContentType(attachment.contentType);
+  if (format === "json") {
+    return {
+      message_id: message.headerMessageId || null,
+      partName,
+      name: attachment.name || partName,
+      content_type: contentType,
+      size: bytes.length,
+      data_base64: Attachments.encodeBase64(bytes)
+    };
+  }
+
+  return Utils.binaryResponse(Attachments.encodeBase64(bytes), {
+    "Content-Type": contentType,
+    "Content-Length": String(bytes.length),
+    "Content-Disposition": Attachments.contentDisposition(attachment.name || partName),
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-store"
+  });
+}
+
+/**
  * Normalize a Message-ID reference to the form Thunderbird stores.
  * Thunderbird strips angle brackets and compares Message-IDs exactly
  * (plan Appendix A.1), so ` <id@example.com> ` and `id@example.com` both
@@ -1152,6 +1226,7 @@ var Email = {
   refreshMailbox,
   searchMessages,
   getMessage,
+  downloadAttachment,
   composeMessage,
   updateMessages,
   listMailboxes,

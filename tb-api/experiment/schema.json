@@ -56,6 +56,31 @@
         ]
       },
       {
+        "name": "sendBinaryResponse",
+        "type": "function",
+        "async": false,
+        "description": "Write a binary HTTP response body from base64.",
+        "parameters": [
+          {
+            "name": "requestId",
+            "type": "string"
+          },
+          {
+            "name": "statusCode",
+            "type": "integer"
+          },
+          {
+            "name": "headers",
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          {
+            "name": "bodyBase64",
+            "type": "string"
+          }
+        ]
+      },
+      {
         "name": "sendResponse",
         "type": "function",
         "async": false,

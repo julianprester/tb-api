@@ -313,6 +313,14 @@ function backgroundHarness(options = {}) {
 
   async function request(method, pathname, queryString = "", body = "") {
     const result = await context.handleRequest({ method, path: pathname, queryString, body });
+    if (result && typeof result.binaryBodyBase64 === "string") {
+      return {
+        status: result.statusCode,
+        headers: result.headers || {},
+        rawBytes: Uint8Array.from(Buffer.from(result.binaryBodyBase64, "base64")),
+        body: null
+      };
+    }
     return { status: result.statusCode, body: JSON.parse(result.body) };
   }
 
@@ -832,7 +840,8 @@ function experimentHarness(options = {}) {
     calIEvent: {},
     calIAttendee: {},
     calIIcsSerializer: {},
-    nsIMsgIdentity: {}
+    nsIMsgIdentity: {},
+    nsIBinaryOutputStream: {}
   };
   const fixtures = folderSpecs.map(spec => {
     const fixture = { spec, listeners: [], updates: 0 };
@@ -990,6 +999,18 @@ function experimentHarness(options = {}) {
         };
       }
     },
+    "@mozilla.org/binaryoutputstream;1": {
+      createInstance() {
+        return {
+          setOutputStream(stream) { this.stream = stream; },
+          writeByteArray(bytes) {
+            this.stream.bytes = this.stream.bytes || [];
+            this.stream.bytes.push(...bytes);
+          },
+          close() {}
+        };
+      }
+    },
     "@mozilla.org/scriptableinputstream;1": {
       createInstance() {
         return {
@@ -1076,12 +1097,20 @@ function experimentHarness(options = {}) {
         resolve(result);
       };
       const response = {
-        bodyOutputStream: { text: "" },
+        bodyOutputStream: { text: "", bytes: null },
         headers: {},
         processAsync() {},
         setStatusLine(version, status) { this.status = status; },
         setHeader(name, value) { this.headers[name] = value; },
         finish() {
+          if (Array.isArray(this.bodyOutputStream.bytes)) {
+            finish({
+              status: this.status,
+              headers: this.headers,
+              rawBytes: Uint8Array.from(this.bodyOutputStream.bytes)
+            });
+            return;
+          }
           const text = this.bodyOutputStream.text;
           let parsed = null;
           if (text) {

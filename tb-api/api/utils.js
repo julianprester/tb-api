@@ -390,6 +390,14 @@ function jsonResponse(data, statusCode = 200) {
 }
 
 /**
+ * Format a binary response envelope. The HTTP layer writes `binaryBodyBase64`
+ * as raw bytes and applies `headers`; `body` is intentionally absent.
+ */
+function binaryResponse(bodyBase64, headers = {}, statusCode = 200) {
+  return { statusCode, headers, binaryBodyBase64: bodyBase64 };
+}
+
+/**
  * Format error response with helpful suggestions
  *
  * `extra` is merged into the JSON body last; used to carry machine-readable
@@ -419,6 +427,10 @@ function errorResponse(message, statusCode = 400, suggestions = null, code = nul
  * serialized into the body, exactly like the error path.
  */
 function resultResponse(result, errorStatusCode = 400) {
+  // A binary envelope is already an HTTP-ready response; serialising it as
+  // JSON would drop the headers and turn the bytes into a JSON string.
+  if (result && result.binaryBodyBase64 !== undefined) return result;
+
   if (result.error) {
     const { error, code, statusCode, suggestions, ...extra } = result;
     return errorResponse(
@@ -597,6 +609,7 @@ var Utils = {
   fuzzyMatch,
   resolveTarget,
   jsonResponse,
+  binaryResponse,
   errorResponse,
   fail,
   resultResponse,

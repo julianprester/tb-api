@@ -275,6 +275,25 @@ curl "http://localhost:9595/messages/%3Cabc123%40example.com%3E"
 curl "http://localhost:9595/messages/abc123%40example.com"
 ```
 
+#### Download Attachment
+
+```http
+GET /messages/:message_id/attachments/:part_name
+```
+
+Returns one attachment's bytes. `part_name` is the `partName` value in the
+message's `attachments` array. The default response uses the attachment's
+`Content-Type`, a `Content-Disposition` filename, `Content-Length`, and
+`X-Content-Type-Options: nosniff`. Add `?format=json` to receive
+`{message_id, partName, name, content_type, size, data_base64}` instead.
+Unknown part names are `404 attachment_not_found`; malformed ones are `400
+invalid_part_name`.
+
+```bash
+curl -OJ "http://localhost:9595/messages/12345/attachments/1.2"
+curl "http://localhost:9595/messages/12345/attachments/1.2?format=json"
+```
+
 #### Compose Message
 
 ```http

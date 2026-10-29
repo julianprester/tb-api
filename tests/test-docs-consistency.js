@@ -41,6 +41,11 @@ function backgroundRoutes(source) {
   const routes = new Set();
   for (const match of source.matchAll(/path === "(\/[^"]*)"/g)) routes.add(match[1]);
   for (const match of source.matchAll(/path\.startsWith\("(\/[^"]*)\/"\)/g)) routes.add(`${match[1]}/:id`);
+  // The attachment route is matched with a regular expression rather than an
+  // equality/prefix check, so the sweep names it explicitly.
+  if (source.includes("/^\\/messages\\/([^/]+)\\/attachments\\/([^/]+)$/")) {
+    routes.add("/messages/:id/attachments/:partName");
+  }
   return routes;
 }
 
@@ -105,7 +110,8 @@ test("route extraction finds every route the extension handles", () => {
     "/mailboxes",
     "/mailboxes/refresh",
     "/messages",
-    "/messages/:id"
+    "/messages/:id",
+    "/messages/:id/attachments/:partName"
   ], "background.js routes changed; update the docs sweep if this is intentional");
 
   assert.deepEqual([...calendar].sort(), [

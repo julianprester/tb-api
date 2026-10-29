@@ -30,7 +30,8 @@ async function handleRequest(request) {
           },
           email: {
             "GET /messages": "Search messages, newest first by default (sort=date_desc; date_asc oldest first). Params: text/q/query/search/keyword, from/sender/author, to/recipient, subject/subj, mailbox/folder (ID, name, or role), after/since (default none), before/until, read/seen/opened, unread/unseen, flagged/starred, junk/spam, limit (default 50, max 100), refresh (default false; requires mailbox), timeoutMs (default 30000, max 60000), include_preview (default true; false omits preview/has_attachment and reads no bodies). Responses include matched/complete/has_more/warnings, resolved_mailbox {id,name,matched_by} when a mailbox was given, boolean read status, and honest draft/answered/forwarded facts when known",
-            "GET /messages/:id": "Get message by Message-ID (with or without angle brackets) or internal ID. Response includes matches (copies found), boolean read status, draft, flags, body and attachments",
+            "GET /messages/:id": "Get message by Message-ID (with or without angle brackets) or internal ID. Response includes matches (copies found), boolean read status, draft, flags, body and attachments; each attachment carries partName, content_id when known, inline when Thunderbird reports contentDisposition, and download_url",
+            "GET /messages/:id/attachments/:partName": "Download one attachment. Raw bytes by default with Content-Type, Content-Length and Content-Disposition. Use format=json for {message_id, partName, name, content_type, size, data_base64}. Unknown or malformed part names are 404/400",
             "POST /messages": "Compose/reply/forward (saves as draft). Params: to, subject, body, identity, in_reply_to (reply), forward_of (forward)",
             "PATCH /messages": "Update flags and/or move messages. Params: ids[] (Message-IDs with or without angle brackets, or internal IDs), add_flags/remove_flags (read/seen/opened, unread/unseen, flagged/starred, junk/spam; unknown or conflicting flags are 400), move_to/folder (resolved exactly). Response: 200 {updated, moved, results}; 207 partial (includes not_found when some ids did not resolve); 502 update_failed when no message was fully updated (see updated/results)",
             "GET /mailboxes": "List all mail folders",
@@ -62,6 +63,15 @@ async function handleRequest(request) {
     }
 
     if (path.startsWith("/messages/") && method === "GET") {
+      const attachmentMatch = path.match(/^\/messages\/([^/]+)\/attachments\/([^/]+)$/);
+      if (attachmentMatch) {
+        const messageRef = decodeURIComponent(attachmentMatch[1]);
+        const partName = decodeURIComponent(attachmentMatch[2]);
+        return Utils.resultResponse(
+          await Email.downloadAttachment(messageRef, partName, { format: params.format })
+        );
+      }
+
       const messageId = decodeURIComponent(path.slice("/messages/".length));
       return Utils.resultResponse(await Email.getMessage(messageId), 404);
     }
@@ -133,6 +143,16 @@ browser.httpServer.onRequest.addListener(async (request) => {
     response = await handleRequest(request);
   } catch (e) {
     console.error("[tb-api] Request handler failed:", e);
+  }
+
+  if (response && typeof response.binaryBodyBase64 === "string" && Number.isInteger(response.statusCode)) {
+    browser.httpServer.sendBinaryResponse(
+      request.id,
+      response.statusCode,
+      response.headers || {},
+      response.binaryBodyBase64
+    );
+    return;
   }
 
   if (!response || typeof response.body !== "string" || !Number.isInteger(response.statusCode)) {

@@ -49,6 +49,37 @@ function finishPendingResponse(pending, statusCode, body) {
 }
 
 /**
+ * Write a binary body to a stored pending response and finish it. The base64
+ * decoder is injected so this helper stays outside the per-request scope.
+ */
+function finishPendingBinaryResponse(pending, statusCode, headers, bodyBase64, decodeBase64) {
+  if (pending.timer !== undefined) clearTimeout(pending.timer);
+
+  let bytes;
+  try {
+    bytes = decodeBase64(bodyBase64);
+  } catch (e) {
+    console.error("[tb-api] Binary response contained invalid base64:", e);
+    finishPendingResponse(pending, 500, JSON.stringify({ error: "Internal server error" }));
+    return;
+  }
+
+  const { response, httpVersion } = pending;
+  response.setStatusLine(httpVersion, statusCode, "OK");
+  for (const [name, value] of Object.entries(headers || {})) {
+    response.setHeader(name, value, false);
+  }
+
+  const bos = Cc["@mozilla.org/binaryoutputstream;1"]
+    .createInstance(Ci.nsIBinaryOutputStream);
+  bos.setOutputStream(response.bodyOutputStream);
+  bos.writeByteArray(Array.from(bytes));
+  bos.close();
+
+  response.finish();
+}
+
+/**
  * Answer every pending request with 503 and clear its watchdog. Used on
  * shutdown so no client waits for a response that will never come.
  */
@@ -143,6 +174,14 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
     );
     const calendar = calendarScope;
 
+    // Attachment helpers are pure; load them into their own scope so the
+    // binary response writer can decode the background's base64 envelope.
+    const attachmentScope = {};
+    Services.scriptloader.loadSubScript(
+      context.extension.rootURI.resolve("api/attachments.js"),
+      attachmentScope
+    );
+
     // Calendar API (optional - try to load Thunderbird's calendar module)
     let cal = null;
     try {
@@ -167,6 +206,24 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
 
       self.pendingRequests.delete(requestId);
       finishPendingResponse(pending, statusCode, body);
+      return true;
+    }
+
+    /**
+     * Write a binary response body and finish the HTTP response
+     */
+    function writeBinaryResponse(requestId, statusCode, headers, bodyBase64) {
+      const pending = self.pendingRequests.get(requestId);
+      if (!pending) return false;
+
+      self.pendingRequests.delete(requestId);
+      finishPendingBinaryResponse(
+        pending,
+        statusCode,
+        headers,
+        bodyBase64,
+        attachmentScope.Attachments.decodeBase64
+      );
       return true;
     }
 
@@ -618,6 +675,12 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
             await new Promise(resolve => self.server.stop(resolve));
             self.server = null;
             console.log("[tb-api] HTTP server stopped");
+          }
+        },
+
+        sendBinaryResponse(requestId, statusCode, headers, bodyBase64) {
+          if (!writeBinaryResponse(requestId, statusCode, headers, bodyBase64)) {
+            console.error(`[tb-api] No pending request with id ${requestId}`);
           }
         },
 
