@@ -80,3 +80,54 @@ test("limitError reports per-file, total, and count violations", () => {
   assert.equal(A.limitError([2, 2], limits).code, "attachment_too_large");
   assert.equal(A.limitError([1, 1, 1], limits).code, "too_many_attachments");
 });
+
+function messageFixture(overrides = {}) {
+  return {
+    id: 1,
+    headerMessageId: "msg-1@example.test",
+    date: new Date(Date.UTC(2026, 0, 1)),
+    author: "Sender <sender@example.test>",
+    recipients: ["Receiver <receiver@example.test>"],
+    subject: "Hello",
+    read: false,
+    folder: { id: "account1:/Inbox", name: "Inbox", specialUse: [] },
+    ...overrides
+  };
+}
+
+test("GET /messages/:id exposes partName, content_id, inline, and download_url", async () => {
+  const h = backgroundHarness({
+    messages: [messageFixture()],
+    messenger: {
+      messages: {
+        async listAttachments() {
+          return [
+            {
+              name: "report.pdf",
+              size: 12,
+              contentType: "application/pdf",
+              partName: "1.2",
+              contentId: "cid-1",
+              contentDisposition: "inline"
+            },
+            { name: "plain.txt", size: 3, contentType: "text/plain", partName: "1.3" }
+          ];
+        }
+      }
+    }
+  });
+
+  const { status, body } = await h.request("GET", "/messages/1", "");
+  assert.equal(status, 200);
+  assert.deepEqual(body.attachments[0], {
+    name: "report.pdf",
+    size: 12,
+    contentType: "application/pdf",
+    partName: "1.2",
+    content_id: "cid-1",
+    inline: true,
+    download_url: "/messages/1/attachments/1.2"
+  });
+  assert.equal(Object.hasOwn(body.attachments[1], "inline"), false);
+  assert.equal(Object.hasOwn(body.attachments[1], "content_id"), false);
+});

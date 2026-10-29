@@ -540,11 +540,24 @@ async function getMessage(messageId) {
     mailbox: msg.folder?.name || "",
     matches: resolved.matches,
     body,
-    attachments: attachments.map(a => ({
-      name: a.name,
-      size: a.size,
-      contentType: a.contentType
-    })),
+    attachments: attachments.map(a => {
+      const attachment = {
+        name: a.name,
+        size: a.size,
+        contentType: a.contentType,
+        partName: a.partName
+      };
+      if (a.contentId) attachment.content_id = a.contentId;
+      // contentDisposition is absent on Thunderbird 128; an unknown value must
+      // stay absent instead of being reported as "not inline".
+      if (typeof a.contentDisposition === "string") {
+        attachment.inline = a.contentDisposition === "inline";
+      }
+      if (typeof a.partName === "string") {
+        attachment.download_url = `/messages/${msg.id}/attachments/${encodeURIComponent(a.partName)}`;
+      }
+      return attachment;
+    }),
     in_reply_to: full.headers?.["in-reply-to"]?.[0] || null,
     references: full.headers?.["references"]?.[0]?.split(/\s+/) || []
   };
