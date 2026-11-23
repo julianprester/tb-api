@@ -142,21 +142,29 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
     const self = this;
     context.callOnClose(self);
 
+    // Load one of the extension's own scripts into the given scope.
+    // Thunderbird 153 rejects jar: (and moz-extension:) subscripts unless the
+    // caller opts in with allowUnsafeURL, and the experiment parent sandbox is
+    // not trusted for the extension's own jar. ExtensionCommon loads this very
+    // module the same way, so mirror it. Without the opt-in, every load throws
+    // "Trying to load untrusted URI" and getAPI() fails, which surfaces to the
+    // background as a generic error and leaves the HTTP server never started.
+    const loadExtensionScript = (name, scope) => {
+      Services.scriptloader.loadSubScriptWithOptions(
+        context.extension.rootURI.resolve(name),
+        { target: scope, allowUnsafeURL: true }
+      );
+    };
+
     if (!self.folderRefresher) {
       const folderScope = { Services, Ci, Components, ChromeUtils, console, MailServices };
-      Services.scriptloader.loadSubScript(
-        context.extension.rootURI.resolve("experiment/folders.js"),
-        folderScope
-      );
+      loadExtensionScript("experiment/folders.js", folderScope);
       self.folderRefresher = new folderScope.FolderRefresher();
     }
 
     // Load HttpServer via loadSubScript (httpd.js is not an ES module)
     const httpdScope = {};
-    Services.scriptloader.loadSubScript(
-      context.extension.rootURI.resolve("lib/httpd.js"),
-      httpdScope
-    );
+    loadExtensionScript("lib/httpd.js", httpdScope);
     const { HttpServer } = httpdScope;
 
     // Import calendar module. utils.js is loaded into the same scope first so
@@ -164,23 +172,14 @@ var httpServer = class extends ExtensionCommon.ExtensionAPI {
     // MailServices is shared so createEvent can validate the organizer against
     // the user's own identities (D8).
     const calendarScope = { MailServices };
-    Services.scriptloader.loadSubScript(
-      context.extension.rootURI.resolve("api/utils.js"),
-      calendarScope
-    );
-    Services.scriptloader.loadSubScript(
-      context.extension.rootURI.resolve("api/calendar.js"),
-      calendarScope
-    );
+    loadExtensionScript("api/utils.js", calendarScope);
+    loadExtensionScript("api/calendar.js", calendarScope);
     const calendar = calendarScope;
 
     // Attachment helpers are pure; load them into their own scope so the
     // binary response writer can decode the background's base64 envelope.
     const attachmentScope = {};
-    Services.scriptloader.loadSubScript(
-      context.extension.rootURI.resolve("api/attachments.js"),
-      attachmentScope
-    );
+    loadExtensionScript("api/attachments.js", attachmentScope);
 
     // Calendar API (optional - try to load Thunderbird's calendar module)
     let cal = null;

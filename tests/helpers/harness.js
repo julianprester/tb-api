@@ -941,23 +941,37 @@ function experimentHarness(options = {}) {
   });
   const Components = { isSuccessCode: code => (code >>> 31) === 0 };
 
+  function evaluateExtensionScript(name, scope) {
+    if (name === "lib/httpd.js") {
+      scope.HttpServer = Server;
+      return;
+    }
+    if (name.endsWith("experiment/folders.js")) {
+      scope.Date = { now: () => clock.now };
+      vm.runInNewContext(source(name), scope, { filename: name });
+      return;
+    }
+    // api/calendar.js (and api/utils.js once it is loaded alongside it)
+    // runs in the privileged experiment scope.
+    Object.assign(scope, { Cc, Ci, ChromeUtils, Services, Components, console: silentConsole });
+    vm.runInNewContext(source(name), scope, { filename: name });
+  }
+
   const Services = {
     io: { offline: !!options.offline },
     scriptloader: {
-      loadSubScript(name, scope) {
-        if (name === "lib/httpd.js") {
-          scope.HttpServer = Server;
-          return;
+      // Thunderbird 153 rejects jar:/moz-extension: subscripts unless the
+      // caller opts in with allowUnsafeURL (ExtensionCommon does exactly that
+      // when it loads experiment API modules). Plain loadSubScript fails the
+      // same way the real platform does, so a missing opt-in cannot pass.
+      loadSubScript(name) {
+        throw new Error("Trying to load untrusted URI.: " + name);
+      },
+      loadSubScriptWithOptions(name, opts = {}) {
+        if (!opts.allowUnsafeURL) {
+          throw new Error("Trying to load untrusted URI.: " + name);
         }
-        if (name.endsWith("experiment/folders.js")) {
-          scope.Date = { now: () => clock.now };
-          vm.runInNewContext(source(name), scope, { filename: name });
-          return;
-        }
-        // api/calendar.js (and api/utils.js once it is loaded alongside it)
-        // runs in the privileged experiment scope.
-        Object.assign(scope, { Cc, Ci, ChromeUtils, Services, Components, console: silentConsole });
-        vm.runInNewContext(source(name), scope, { filename: name });
+        evaluateExtensionScript(name, opts.target);
       }
     }
   };

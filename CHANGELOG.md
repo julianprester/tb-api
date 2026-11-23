@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.1] - 2026-11-23
+
+Startup fix for Thunderbird 153. No API behavior changes.
+
+### Fixed
+
+- The experiment API loads its own scripts (`experiment/folders.js`,
+  `lib/httpd.js`, `api/utils.js`, `api/calendar.js`, `api/attachments.js`) with
+  an explicit `allowUnsafeURL` opt-in, matching how Thunderbird itself loads
+  experiment modules. Thunderbird 153 rejects these `jar:`/`moz-extension:`
+  subscripts as untrusted, which aborted `getAPI()`, surfaced to the background
+  as a generic "An unexpected error occurred", and left the HTTP server
+  unstarted on port 9595.
+- The mocked experiment harness now rejects plain `loadSubScript` extension
+  loads the way Thunderbird 153 does, so a missing opt-in fails the suite
+  instead of passing silently.
+
 ## [4.0.0] - 2026-10-29
 
 Email attachment support. The new endpoints and fields are additive; existing
